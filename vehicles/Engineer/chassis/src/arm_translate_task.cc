@@ -60,7 +60,7 @@ void armTranslateTask(void* arg){
 	}
 	base_translate_motor->ReAlign();
 	
-	base_translate_motor->TurnRelative(1, true);
+	base_translate_motor->TurnRelative(-1, true);
 	base_translate_motor->CalcOutput();
 	control::MotorCANBase::TransmitOutput(&motor9, 1);
 	osDelay(200); // wait to 
@@ -129,10 +129,10 @@ void init_arm_translate() {
 	servoLG_data.max_out = 13000;
 	// TODO measure the calibrate offset for base translate motor
 	servoLG_data.calibrate_offset = 0;
-	servoLG_data.forward_soft_limit = 25.5; //25.5
-	servoLG_data.reverse_soft_limit = 1;
+	servoLG_data.forward_soft_limit = -1; //25.5
+	servoLG_data.reverse_soft_limit = -25.5;
 	servoLG_data.align_detect_func = base_translate_align_detect;
-	servoLG_data.align_dir_invert = true;
+	servoLG_data.align_dir_invert = false;
 
 	base_translate_motor = new control::ServoMotorWithLG(servoLG_data);
 }

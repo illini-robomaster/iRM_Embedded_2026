@@ -38,9 +38,7 @@ static control::Steering6020* steering_motor4 = nullptr;
 
 static control::engineer_steering_chassis_t* chassis_data;
 static control::EngineerSteeringChassis* chassis;
-
-static BoolEdgeDetector RotateBarrel(false);
-
+        
 static control::HRB_SuperCap *supercap = nullptr;
 
 int16_t loop_count = 0;

@@ -400,12 +400,12 @@ void armTask(void* args) {
 
   // uncomment SetZeroPos() if remounted 4310
 
-  // forearm_rotate_motor_4->SetZeroPos();
-  // osDelay(10);
-  // wrist_rotate_motor_5->SetZeroPos();
-  // osDelay(10);
-  // hand_rotate_motor_6->SetZeroPos();  
-  // osDelay(10);
+  forearm_rotate_motor_4->SetZeroPos();
+  osDelay(10);
+  wrist_rotate_motor_5->SetZeroPos();
+  osDelay(10);
+  hand_rotate_motor_6->SetZeroPos();  
+  osDelay(10);
 
 
 

@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------- #
 
 # generic board interface
-add_library(board_interface INTERFACE ../examples/motor/HERO_SERVO.cc)
+add_library(board_interface INTERFACE)
 target_compile_definitions(board_interface INTERFACE USE_HAL_DRIVER)
 target_compile_options(board_interface INTERFACE
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
@@ -33,3 +33,4 @@ target_link_libraries(board_interface INTERFACE c m)
 add_subdirectory(DJI_Board_TypeA)
 add_subdirectory(DJI_Board_TypeC)
 add_subdirectory(DM_MC_01)
+add_subdirectory(DM_MC_02)

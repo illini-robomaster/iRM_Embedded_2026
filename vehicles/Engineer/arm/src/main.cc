@@ -139,10 +139,10 @@ void RM_RTOS_Default_Task(const void* args) {
         // print("ROBOTID: %d",referee->game_robot_status.robot_id);
 #endif
         send->cmd.id = bsp::VX;
-        send->cmd.data_float = -sbus->ch[6]/660.0;
+        send->cmd.data_float = sbus->ch[6]/660.0;
         send->TransmitOutput();
         send->cmd.id = bsp::VY;
-        send->cmd.data_float = -sbus->ch[7]/660.0;
+        send->cmd.data_float = sbus->ch[7]/660.0;
         send->TransmitOutput();
         send->cmd.id = bsp::RELATIVE_ANGLE;
         send->cmd.data_float = -sbus->ch[8]/660.0;

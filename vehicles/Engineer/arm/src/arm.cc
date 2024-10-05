@@ -363,7 +363,7 @@ void checkEncodersConnected(){
     if (!encoder1->is_connected()){
       print("encoder 1 not connected\r\n");
     }
-    print("encoder 0: %d encoder 1: %d\r\n", encoder0->getData(), encoder1->getData());
+    print("encoder 0: %f encoder 1: %f\r\n", encoder0->getData(), encoder1->getData());
     osDelay(100);
   }
 }
@@ -400,12 +400,12 @@ void armTask(void* args) {
 
   // uncomment SetZeroPos() if remounted 4310
 
-  forearm_rotate_motor_4->SetZeroPos();
-  osDelay(10);
-  wrist_rotate_motor_5->SetZeroPos();
-  osDelay(10);
-  hand_rotate_motor_6->SetZeroPos();  
-  osDelay(10);
+  // forearm_rotate_motor_4->SetZeroPos();
+  // osDelay(10);
+  // wrist_rotate_motor_5->SetZeroPos();
+  // osDelay(10);
+  // hand_rotate_motor_6->SetZeroPos();  
+  // osDelay(10);
 
 
 

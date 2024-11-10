@@ -52,7 +52,7 @@ void chassisTask(void* arg){
     UNUSED(arg);
 
     control::MotorCANBase* wheel_motors[] = {motor5, motor6, motor7, motor8};
-    control::MotorCANBase* steer_motors[] = {motor2, motor3, motor4};
+    control::MotorCANBase* steer_motors[] = {motor2, motor3, motor4, motor1};
     chassis->SteerSetMaxSpeed(ALIGN_SPEED);
 	chassis->Calibrate();
 
@@ -165,8 +165,7 @@ void chassisTask(void* arg){
                        50);
 
 
-        control::MotorCANBase::TransmitOutput(steer_motors, 3);
-        control::MotorCANBase::TransmitOutput(&motor1, 1);
+        control::MotorCANBase::TransmitOutput(steer_motors, 4);
         control::MotorCANBase::TransmitOutput(wheel_motors, 4);
 
         // if(HAL_GetTick() - last_cap_send > 10){ // 100Hz
@@ -194,7 +193,7 @@ void chassisTask(void* arg){
 
 void init_chassis(){
     print("Starting chassis init\n");
-    motor1 = new control::Motor6020(can1, 0x209);
+    motor1 = new control::Motor6020(can1, 0x205);
     motor2 = new control::Motor6020(can1, 0x206);
     motor3 = new control::Motor6020(can1, 0x207);
     motor4 = new control::Motor6020(can1, 0x208);
@@ -258,7 +257,7 @@ void kill_chassis(){
     RM_EXPECT_TRUE(false, "Operation Killed!\r\n");
 
     control::MotorCANBase* wheel_motors[] = {motor5, motor6, motor7, motor8}; 
-    control::MotorCANBase* steer_motors[] = {motor2, motor3, motor4};
+    control::MotorCANBase* steer_motors[] = {motor2, motor3, motor4, motor1};
 
     // RGB->Display(display::color_blue);
    // set alignment status of each wheel to false
@@ -267,8 +266,7 @@ void kill_chassis(){
     motor7->SetOutput(0);
     motor8->SetOutput(0);
     control::MotorCANBase::TransmitOutput(wheel_motors, 4);
-    control::MotorCANBase::TransmitOutput(&motor1, 1); // id 0x209 has a different identifier
-    control::MotorCANBase::TransmitOutput(steer_motors, 3);
+    control::MotorCANBase::TransmitOutput(steer_motors, 4);
 }
 
 void revive_chassis(){

@@ -34,8 +34,8 @@ void kill_arm_translate();
 void revive_arm_translate();
 
 
-/* M3508 params start */
-const int BASE_TRANSLATE_ID = 0x205;
+/* M3508 params start */ 
+const int BASE_TRANSLATE_ID = 0x209; // TODO: need to reconnect
 //const GPIO_TypeDef* BASE_TRANS_INIT_GPIO_PORT = GPIOI;
 //const uint16_t BASE_TRANS_INIT_GPIO_PIN = GPIO_PIN_7;  // PWM pin 1 on C board
 

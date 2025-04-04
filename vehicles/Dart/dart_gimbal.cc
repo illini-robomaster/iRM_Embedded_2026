@@ -36,16 +36,22 @@
 
 #define DEFAULT_TASK_DELAY 100
 
+#define MAX_IOUT 16384
+#define MAX_OUT 60000
+
 bsp::GPIO* key = nullptr;
 control::MotorPWMBase* trigger_motor;
 control::MotorCANBase *load_motor;
-static int motor1_output = 1500;
-static int load_output = 0;
 static remote::DBUS *dbus;
-
 static bsp::CAN *can1 = nullptr;  // for load motor
 
+// variables:
+static int motor1_output = 1500;
+static int load_output = 0;
 
+float Kp_load = 50;
+float Ki_load = 15;
+float Kd_load = 65;
 // thread attributes
 
 osThreadId_t dartLoadTaskHandle;
@@ -62,7 +68,8 @@ const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
 
 void dartLoadTask(void *arg) {
   UNUSED(arg);
-  control::PIDController pid(30, 15, 25); // Adjusted PID gains for stronger control
+  float param[] = {Kp_load,Ki_load,Kd_load};
+  control::ConstrainedPID pid(param, MAX_IOUT, MAX_OUT); 
   control::MotorCANBase* motors_can1_load[] = {load_motor};  // load motor
   float diff_load = 0;
   float load_target_speed = 0; // target speed for load motor, can be adjusted
@@ -82,7 +89,8 @@ void dartLoadTask(void *arg) {
     if (dbus->swl == remote::UP) {  // when SWL is up, run the load motor
       // Set target speed for load motor
       load_target_speed = 300; // adjust target speed based on dbus ch3 input
-    } else if (dbus->swl == remote::DOWN){
+    } 
+    else if (dbus->swl == remote::DOWN){
       load_target_speed = -180;
     }
     else {

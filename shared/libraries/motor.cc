@@ -86,7 +86,7 @@ void MotorCANBase::TransmitOutput(MotorCANBase* motors[], uint8_t num_motors) {
     const uint8_t motor_idx = (motors[i]->rx_id_ - 1) % 4;
     const int16_t output = motors[i]->output_;
     data[2 * motor_idx] = output >> 8;
-    data[2 * motor_idx + 1] = output & 0xff;
+    data[2 * motor_idx + 1] = output & 0xFF;
   }
 
   motors[0]->can_->Transmit(motors[0]->tx_id_, data, 8);

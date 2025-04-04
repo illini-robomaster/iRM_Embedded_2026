@@ -146,7 +146,7 @@ const osThreadAttr_t chassisTaskAttribute = {.name = "chassisTask",
                                              .tz_module = 0,
                                              .reserved = 0};
 
-static control::MotorCANBase* motor1 = nullptr;
+static control::MotorCANBase* trigger_motor = nullptr;
 static control::MotorCANBase* motor2 = nullptr;
 static control::MotorCANBase* motor3 = nullptr;
 static control::MotorCANBase* motor4 = nullptr;
@@ -183,7 +183,7 @@ bool steering_align_detect4() { return pe4->Read() == 0; }
 void chassisTask(void* arg) {
   UNUSED(arg);
 
-  control::MotorCANBase* steer_motors[] = {motor1, motor2, motor3, motor4};
+  control::MotorCANBase* steer_motors[] = {trigger_motor, motor2, motor3, motor4};
   control::MotorCANBase* wheel_motors[] = {motor5, motor6, motor7, motor8};
 
   while (!receive->start) osDelay(100);
@@ -365,7 +365,7 @@ void self_Check_Task(void* arg){
     motor4->connection_flag_ = false;
     motor3->connection_flag_ = false;
     motor2->connection_flag_ = false;
-    motor1->connection_flag_ = false;
+    trigger_motor->connection_flag_ = false;
     osDelay(100);
     fl_wheel_motor_flag = motor8->connection_flag_;
     fr_wheel_motor_flag = motor7->connection_flag_;
@@ -374,7 +374,7 @@ void self_Check_Task(void* arg){
     fl_steer_motor_flag = motor4->connection_flag_;
     fr_steer_motor_flag = motor3->connection_flag_;
     br_steer_motor_flag = motor2->connection_flag_;
-    bl_steer_motor_flag = motor1->connection_flag_;
+    bl_steer_motor_flag = trigger_motor->connection_flag_;
     flag_summary = bl_steer_motor_flag|
                    br_steer_motor_flag<<1|
                    fr_steer_motor_flag<<2|
@@ -400,7 +400,7 @@ void RM_RTOS_Init() {
   can2 = new bsp::CAN(&hcan2, false);
   RGB = new display::RGB(&htim5, 3, 2, 1, 1000000);
 
-  motor1 = new control::Motor3508(can1, 0x201);
+  trigger_motor = new control::Motor3508(can1, 0x201);
   motor2 = new control::Motor3508(can1, 0x202);
   motor3 = new control::Motor3508(can1, 0x203);
   motor4 = new control::Motor3508(can1, 0x204);
@@ -420,7 +420,7 @@ void RM_RTOS_Init() {
   supercap = new control::SuperCap(can2, 0x201);
 
   control::steering_t steering_motor_data;
-  steering_motor_data.motor = motor1;
+  steering_motor_data.motor = trigger_motor;
   steering_motor_data.max_speed = RUN_SPEED;
   steering_motor_data.max_acceleration = ACCELERATION;
   steering_motor_data.transmission_ratio = 8;

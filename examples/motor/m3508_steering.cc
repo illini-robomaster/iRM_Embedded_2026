@@ -36,7 +36,7 @@ constexpr float ALIGN_SPEED = (0.5 * PI);
 constexpr float ACCELERATION = (100 * PI);
 
 bsp::CAN* can1 = nullptr;
-control::MotorCANBase* motor1 = nullptr;
+control::MotorCANBase* trigger_motor = nullptr;
 control::MotorCANBase* motor3 = nullptr;
 control::SteeringMotor* steering1 = nullptr;
 control::SteeringMotor* steering3 = nullptr;
@@ -60,7 +60,7 @@ void RM_RTOS_Init() {
   bsp::SetHighresClockTimer(&htim5);
 
   can1 = new bsp::CAN(&hcan1, true);
-  motor1 = new control::Motor3508(can1, 0x201);
+  trigger_motor = new control::Motor3508(can1, 0x201);
   motor3 = new control::Motor3508(can1, 0x203);
 
   /* Usage:
@@ -75,7 +75,7 @@ void RM_RTOS_Init() {
   key3 = new bsp::GPIO(GPIOC, GPIO_PIN_2);
 
   control::steering_t steering_data;
-  steering_data.motor = motor1;
+  steering_data.motor = trigger_motor;
   steering_data.max_speed = RUN_SPEED;
   steering_data.max_acceleration = ACCELERATION;
   steering_data.transmission_ratio = M3508P19_RATIO;
@@ -94,7 +94,7 @@ void RM_RTOS_Init() {
 
 void RM_RTOS_Default_Task(const void* args) {
   UNUSED(args);
-  control::MotorCANBase* motors[] = {motor1, motor3};
+  control::MotorCANBase* motors[] = {trigger_motor, motor3};
 
   osDelay(500);  // DBUS initialization needs time
 

@@ -30,7 +30,7 @@
 
 bsp::GPIO* key1 = nullptr;
 bsp::CAN* can1 = nullptr;
-control::MotorCANBase* motor1 = nullptr;
+control::MotorCANBase* trigger_motor = nullptr;
 control::ServoMotor* servo1 = nullptr;
 
 void RM_RTOS_Init() {
@@ -38,10 +38,10 @@ void RM_RTOS_Init() {
   bsp::SetHighresClockTimer(&htim5);
 
   can1 = new bsp::CAN(&hcan1, true);
-  motor1 = new control::Motor3508(can1, 0x201);
+  trigger_motor = new control::Motor3508(can1, 0x201);
   control::servo_t servo_data;
 
-  servo_data.motor = motor1;
+  servo_data.motor = trigger_motor;
   servo_data.max_speed = 2 * PI;
   servo_data.max_acceleration = 20 * PI;
   servo_data.transmission_ratio = M3508P19_RATIO;
@@ -55,15 +55,15 @@ void RM_RTOS_Init() {
 
 void RM_RTOS_Default_Task(const void* args) {
   UNUSED(args);
-  control::MotorCANBase* motors[] = {motor1};
+  control::MotorCANBase* motors[] = {trigger_motor};
   bool stop_now = false;
 
   while (true) {
     if (key1->Read()) {
       stop_now = false;
     }
-    if (abs(motor1->GetCurr()) > 10500 || stop_now) {
-      motor1->SetOutput(0);
+    if (abs(trigger_motor->GetCurr()) > 10500 || stop_now) {
+      trigger_motor->SetOutput(0);
       stop_now = true;
     } else {
       servo1->SetTarget(servo1->GetTarget() + (PI / 4), false);

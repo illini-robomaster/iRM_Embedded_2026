@@ -59,13 +59,13 @@ const osThreadAttr_t MotorTaskAttributes = {.name = "MotorTask",
 
 
 bsp::CAN* can = nullptr;
-control::MotorCANBase* motor1 = nullptr;
+control::MotorCANBase* trigger_motor = nullptr;
 
 void MotorTask(void* argument) {
   UNUSED(argument);
   uint32_t flags;
   control::PIDController pid1(20, 0, 0);
-  control::MotorCANBase* motors[] = {motor1};
+  control::MotorCANBase* motors[] = {trigger_motor};
 
   while (true) {
     // Wait time = 50 ticks, 50ms?
@@ -76,17 +76,17 @@ void MotorTask(void* argument) {
       // if receives packet, drive the motor and toggle RED LED
       float diff = 0;
       int16_t out = 0;
-      diff = motor1->GetOmegaDelta(vx);
+      diff = trigger_motor->GetOmegaDelta(vx);
       out = pid1.ComputeConstrainedOutput(diff);
-      motor1->SetOutput(out);
+      trigger_motor->SetOutput(out);
       gpio_red->Toggle();
     } else {
       // if timeout (no packet, stop the motor)
       float diff = 0;
       int16_t out = 0;
-      diff = motor1->GetOmegaDelta(0);
+      diff = trigger_motor->GetOmegaDelta(0);
       out = pid1.ComputeConstrainedOutput(diff);
-      motor1->SetOutput(out);
+      trigger_motor->SetOutput(out);
     }
     control::MotorCANBase::TransmitOutput(motors, 1);
     osDelay(10);
@@ -111,7 +111,7 @@ void RM_RTOS_Threads_Init(void) {
 
 void RM_RTOS_Init(void) {
   can = new bsp::CAN(&hcan1, true);
-  motor1 = new control::Motor3508(can, 0x201);
+  trigger_motor = new control::Motor3508(can, 0x201);
   gpio_red = new bsp::GPIO(LED_RED_GPIO_Port, LED_RED_Pin);
   gpio_red->High();
   vx_flag_id = osEventFlagsNew(nullptr);

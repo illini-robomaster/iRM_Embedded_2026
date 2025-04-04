@@ -34,6 +34,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(COMMON_FLAGS "-Wall -Werror -Wextra -fdiagnostics-color=always")
 
+
 # default to debug build
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)

@@ -13,7 +13,7 @@
 ### Chassis Type C Board
 |               | CAN | TX ID  | RX ID  |
 | ------------- | --- | ------ | ------ |
-| motor1        | 1   | 0x200  | 0x201  |
+| trigger_motor        | 1   | 0x200  | 0x201  |
 | motor2        | 1   | 0x200  | 0x202  |
 | motor3        | 1   | 0x200  | 0x203  |
 | motor4        | 1   | 0x200  | 0x204  |

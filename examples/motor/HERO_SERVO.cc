@@ -22,12 +22,12 @@ bsp::GPIO* key = nullptr;
 #define KEY_GPIO_GROUP GPIOA
 #define KEY_GPIO_PIN GPIO_PIN_0
 
-control::PDIHV* motor1;
+control::PDIHV* trigger_motor;
 
 void RM_RTOS_Init(){
   print_use_uart(&huart1);
   key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
-  motor1 = new control::PDIHV(&htim1, PWM_CHANNEL,TIM_CLOCK_FREQ,MOTOR_OUT_FREQ, PULSE_WIDTH);
+  trigger_motor = new control::PDIHV(&htim1, PWM_CHANNEL,TIM_CLOCK_FREQ,MOTOR_OUT_FREQ, PULSE_WIDTH);
 //  motor1->SetOutput(1500);
   osDelay(300);
 }
@@ -39,7 +39,7 @@ void RM_RTOS_Default_Task(const void* args) {
   int16_t power = 1947;
   // power is from range 972 to 1947, data on purchasing page is not available, pulse width for central point is 1500
   while(true){
-    motor1->SetOutPutAngle(angle);
+    trigger_motor->SetOutPutAngle(angle);
 
 //    motor1->SetOutput(power);
     if(!key->Read()){

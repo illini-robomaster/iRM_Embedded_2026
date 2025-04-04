@@ -34,16 +34,16 @@
 #define MOTOR_OUT_FREQ 1500
 #define SNAIL_IDLE_THROTTLE 500
 
-control::MotorPWMBase* motor1;
+control::MotorPWMBase* trigger_motor;
 control::MotorPWMBase* motor2;
 
 void RM_RTOS_Init() {
   print_use_uart(&huart8);
-  motor1 = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ,
+  trigger_motor = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ,
                                      SNAIL_IDLE_THROTTLE);
   motor2 = new control::MotorPWMBase(&htim1, RIGHT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ,
                                      MOTOR_OUT_FREQ, SNAIL_IDLE_THROTTLE);
-  motor1->SetOutput(0);
+  trigger_motor->SetOutput(0);
   motor2->SetOutput(0);
   // Snail need to be run at idle throttle for some
   osDelay(3000);
@@ -55,10 +55,10 @@ void RM_RTOS_Default_Task(const void* args) {
 
   while (true) {
     if (key.Read()) {
-      motor1->SetOutput(300);
+      trigger_motor->SetOutput(300);
       motor2->SetOutput(300);
     } else {
-      motor1->SetOutput(0);
+      trigger_motor->SetOutput(0);
       motor2->SetOutput(0);
     }
     osDelay(1000);

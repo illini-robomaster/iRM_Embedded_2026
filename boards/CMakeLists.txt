@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------- #
 
 # generic board interface
-add_library(board_interface INTERFACE ../examples/motor/HERO_SERVO.cc)
+add_library(board_interface INTERFACE)
 target_compile_definitions(board_interface INTERFACE USE_HAL_DRIVER)
 target_compile_options(board_interface INTERFACE
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>

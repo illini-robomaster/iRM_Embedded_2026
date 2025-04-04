@@ -22,15 +22,18 @@
 #include "cmsis_os.h"
 #include "main.h"
 #include "motor.h"
+#include "dbus.h"
 
 static bsp::CAN* can = nullptr;
 static control::MotorCANBase* motor = nullptr;
+remote::DBUS  *dbus = nullptr;
 
 void RM_RTOS_Init() {
   print_use_uart(&huart1);
 
   can = new bsp::CAN(&hcan2, false);
   motor = new control::Motor3508(can, 0x205);
+  dbus = new remote::DBUS(&huart3); // Initialize DBUS for keyboard input
 }
 
 void RM_RTOS_Default_Task(const void* args) {
@@ -38,7 +41,8 @@ void RM_RTOS_Default_Task(const void* args) {
   control::MotorCANBase* motors[] = {motor};
 
   while (true) {
-    motor->SetOutput(800);
+    print("dbus->ch0: %d, dbus->ch1: %d, dbus->ch2: %d\r\n", dbus->ch0, dbus->ch1, dbus->ch2);
+//    motor->SetOutput(800);
     control::MotorCANBase::TransmitOutput(motors, 1);
     osDelay(100);
   }

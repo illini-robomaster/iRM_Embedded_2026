@@ -40,7 +40,7 @@ constexpr float OFFSET_MOTOR2 = 0;
 constexpr float OFFSET_MOTOR3 = 0;
 constexpr float OFFSET_MOTOR4 = 0;
 
-control::MotorCANBase* motor1 = nullptr;
+control::MotorCANBase* trigger_motor = nullptr;
 control::MotorCANBase* motor2 = nullptr;
 control::MotorCANBase* motor3 = nullptr;
 control::MotorCANBase* motor4 = nullptr;
@@ -106,13 +106,13 @@ void RM_RTOS_Init() {
   can2 = new bsp::CAN(&hcan2, false);
 
   // init steerings
-  motor1 = new control::Motor3508(can1, 0x201);
+  trigger_motor = new control::Motor3508(can1, 0x201);
   motor2 = new control::Motor3508(can1, 0x202);
   motor3 = new control::Motor3508(can1, 0x203);
   motor4 = new control::Motor3508(can1, 0x204);
 
   control::steering_t steering_data;
-  steering_data.motor = motor1;
+  steering_data.motor = trigger_motor;
   steering_data.max_speed = RUN_SPEED;
   steering_data.max_acceleration = ACCELERATION;
   steering_data.transmission_ratio = 8;
@@ -162,7 +162,7 @@ void RM_RTOS_Init() {
 
 void RM_RTOS_Default_Task(const void* args) {
   UNUSED(args);
-  control::MotorCANBase* steer_motors[] = {motor1, motor2, motor3, motor4};
+  control::MotorCANBase* steer_motors[] = {trigger_motor, motor2, motor3, motor4};
 
   osDelay(500);
 

@@ -34,3 +34,8 @@ irm_add_arm_executable(${PROJECT_NAME}_mc01
         TARGET DM_MC_01
         SOURCES main.cc)
 target_compile_definitions(${PROJECT_NAME}_mc01.elf PRIVATE UART_HANDLE=huart4)
+
+irm_add_arm_executable(${PROJECT_NAME}_mc02
+        TARGET DM_MC_02
+        SOURCES main.cc)
+target_compile_definitions(${PROJECT_NAME}_mc02.elf PRIVATE UART_HANDLE=huart7)

@@ -50,3 +50,18 @@ irm_add_board_specific_library(DM_MC_01_irm
         SOURCES ${IRM_SOURCES}
         INCLUDES ${IRM_INCLUDES}
         DEPENDS eigen3)
+
+set(DM_MC_02_SOURCES ${IRM_SOURCES})
+list(REMOVE_ITEM DM_MC_02_SOURCES "bsp_can.cc")
+list(REMOVE_ITEM DM_MC_02_SOURCES "bsp_can_bridge.cc")
+set(DM_MC_02_INCLUDES ${IRM_INCLUDES})
+list(FILTER DM_MC_02_INCLUDES EXCLUDE REGEX "bsp_can.h$")
+list(FILTER DM_MC_02_INCLUDES EXCLUDE REGEX "bsp_can_bridge.h$")
+
+
+irm_add_board_specific_library(DM_MC_02_irm
+        TARGET DM_MC_02
+        SOURCES ${DM_MC_02_SOURCES}
+        INCLUDES ${DM_MC_02_INCLUDES}
+        DEPENDS eigen3
+)

@@ -26,8 +26,8 @@
 
 #define TARGET_SPEED 30
 
-bsp::CAN* can = nullptr;
-control::MotorCANBase* motor = nullptr;
+static bsp::CAN* can = nullptr;
+static control::MotorCANBase* motor = nullptr;
 
 void RM_RTOS_Init() {
   print_use_uart(&huart1);
@@ -45,6 +45,7 @@ void RM_RTOS_Default_Task(const void* args) {
     float diff = motor->GetOmegaDelta(TARGET_SPEED);
     int16_t out = pid.ComputeConstrainedOutput(diff);
     motor->SetOutput(out);
+    print("diff: % .4f, out: %d\r\n", diff, out);
     control::MotorCANBase::TransmitOutput(motors, 1);
     motor->PrintData();
     osDelay(10);

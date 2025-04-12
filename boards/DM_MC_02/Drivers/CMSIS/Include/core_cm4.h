@@ -67,9 +67,9 @@
 #define __CM4_CMSIS_VERSION_SUB   (__CM_CMSIS_VERSION_SUB)               /*!< \deprecated [15:0]  CMSIS HAL sub version */
 #define __CM4_CMSIS_VERSION       ((__CM4_CMSIS_VERSION_MAIN << 16U) | \
                                     __CM4_CMSIS_VERSION_SUB           )  /*!< \deprecated CMSIS HAL version number */
-
-#define __CORTEX_M                (4U)                                   /*!< Cortex-M Core */
-
+#ifndef __CORTEX_M
+  #define __CORTEX_M                (4U)                                   /*!< Cortex-M Core */
+#endif
 /** __FPU_USED indicates whether an FPU is used or not.
     For this, __FPU_PRESENT has to be checked prior to making use of FPU specific registers and functions.
 */

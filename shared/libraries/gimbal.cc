@@ -8,8 +8,8 @@ namespace control {
 Gimbal::Gimbal(gimbal_t gimbal)
     : pitch_detector_(BoolEdgeDetector(false)), yaw_detector_(BoolEdgeDetector(false)) {
   // acquired from user
-  pitch_motor_4310_ = gimbal.pitch_motor_4310_;
-  yaw_motor_4310_ = gimbal.yaw_motor_4310_;
+  pitch_motor_4310_ = gimbal.pitch_motor_4310;
+  yaw_motor_4310_ = gimbal.yaw_motor_4310;
   pitch_motor_ = gimbal.pitch_motor;
   yaw_motor_ = gimbal.yaw_motor;
   model_ = gimbal.model;
@@ -187,15 +187,23 @@ void Gimbal::Update() {
       break;
     }
     default:
-      float pt_diff = pitch_motor_->GetThetaDelta(pitch_angle_);
+      float pt_diff = (pitch_motor_4310_ == nullptr)
+                          ? pitch_motor_->GetThetaDelta(pitch_angle_)
+                          : pitch_motor_4310_->GetThetaDelta(pitch_angle_);
       float pt_out = pitch_theta_pid_->ComputeOutput(pt_diff);
-      float po_in = pitch_motor_->GetOmegaDelta(pt_out);
+      float po_in = (pitch_motor_4310_ == nullptr)
+                        ? pitch_motor_->GetOmegaDelta(pt_out)
+                        : pitch_motor_4310_->GetOmegaDelta(pt_out);
       float po_out = pitch_omega_pid_->ComputeConstrainedOutput(po_in);
 
-      float yt_diff = yaw_motor_->GetThetaDelta(yaw_angle_);
+      float yt_diff = (yaw_motor_4310_ == nullptr)
+                          ? yaw_motor_->GetThetaDelta(yaw_angle_)
+                          : yaw_motor_4310_->GetThetaDelta(yaw_angle_);
       float yt_out = yaw_theta_pid_->ComputeOutput(yt_diff);
-      float yt_in = yaw_motor_->GetOmegaDelta(yt_out);
-      float yo_out = yaw_omega_pid_->ComputeConstrainedOutput(yt_in);
+      float yo_in = (yaw_motor_4310_ == nullptr)
+                        ? yaw_motor_->GetOmegaDelta(yt_out)
+                        : yaw_motor_4310_->GetOmegaDelta(yt_out);
+      float yo_out = yaw_omega_pid_->ComputeConstrainedOutput(yo_in);
 
       pitch_motor_->SetOutput(po_out);
       yaw_motor_->SetOutput(yo_out);

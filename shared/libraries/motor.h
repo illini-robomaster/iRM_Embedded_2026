@@ -818,6 +818,15 @@ class Motor4310 {
   float GetOmega() const;
 
   /**
+   * @brief get angular velocity difference (target - actual), in [rad / s]
+   *
+   * @param target  target angular velocity, in [rad / s]
+   *
+   * @return difference angular velocity
+   */
+  float GetOmegaDelta(const float target) const;
+
+  /**
    * @brief get motor torque, in [Nm]
    * @return motor torque
    */

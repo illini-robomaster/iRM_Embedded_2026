@@ -51,11 +51,11 @@ typedef struct {
  * @brief structure used when gimbal instance is initialized
  */
 typedef struct {
-  Motor4310* pitch_motor_4310_; /* 4310 pitch motor instance */
-  Motor4310* yaw_motor_4310_;   /* 4310 pitch motor instance */
-  MotorCANBase* pitch_motor;    /* pitch motor instance */
-  MotorCANBase* yaw_motor;      /* yaw motor instance   */
-  gimbal_model_t model;         /* gimbal model         */
+  Motor4310* pitch_motor_4310; /* 4310 pitch motor instance */
+  Motor4310* yaw_motor_4310;   /* 4310 pitch motor instance */
+  MotorCANBase* pitch_motor;   /* pitch motor instance */
+  MotorCANBase* yaw_motor;     /* yaw motor instance   */
+  gimbal_model_t model;        /* gimbal model         */
 } gimbal_t;
 
 /**

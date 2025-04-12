@@ -815,6 +815,11 @@ float Motor4310::GetThetaDelta(const float target) const {
 float Motor4310::GetOmega() const {
   return omega_;
 }
+
+float Motor4310::GetOmegaDelta(float target) const {
+  return target - omega_;
+}
+
 float Motor4310::GetTorque() const {
   return torque_;
 }

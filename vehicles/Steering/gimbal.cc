@@ -779,8 +779,8 @@ void RM_RTOS_Init(void) {
   pitch_motor = new control::Motor4310(can1, 0x02, 0x01, control::MIT);
   yaw_motor = new control::Motor4310(can1, 0x04, 0x03, control::MIT);
   control::gimbal_t gimbal_data;
-  gimbal_data.pitch_motor_4310_ = pitch_motor;
-  gimbal_data.yaw_motor_4310_ = yaw_motor;
+  gimbal_data.pitch_motor_4310 = pitch_motor;
+  gimbal_data.yaw_motor_4310 = yaw_motor;
   gimbal_data.model = control::GIMBAL_STEERING_4310;
   gimbal = new control::Gimbal(gimbal_data);
   gimbal_param = gimbal->GetData();

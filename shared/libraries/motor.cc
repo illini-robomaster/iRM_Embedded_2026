@@ -71,7 +71,7 @@ MotorCANBase::MotorCANBase(bsp::CAN* can, uint16_t rx_id)
 }
 
 MotorCANBase::MotorCANBase(bsp::CAN* can, uint16_t rx_id, uint16_t type)
-  : theta_(0), omega_(0), can_(can), rx_id_(rx_id) {
+    : theta_(0), omega_(0), can_(can), rx_id_(rx_id) {
   UNUSED(type);
 }
 
@@ -146,39 +146,36 @@ int16_t Motor3508::GetCurr() const { return raw_current_get_; }
 
 uint16_t Motor3508::GetTemp() const { return raw_temperature_; }
 
-
-
-
 //==================================================================================================
 // Motor 3510
 //==================================================================================================
 
-  Motor3510::Motor3510(bsp::CAN* can, uint16_t rx_id):MotorCANBase(can, rx_id){
-    can->RegisterRxCallback(rx_id, can_motor_callback, this);
-  }
-  /* implements data update callback */
-  void Motor3510::UpdateData(const uint8_t data[]) {
-    const int16_t raw_theta = data[0] << 8 | data[1];
-    const int16_t raw_torque = data[2] << 8 | data[3]; 
-    
-    constexpr float THETA_SCALE = 2 * PI / 8192; 
-    theta_ = (float)raw_theta * THETA_SCALE;
-    torque_ = (float)raw_torque;
-    
-    connection_flag_=true;
-  }
+Motor3510::Motor3510(bsp::CAN* can, uint16_t rx_id) : MotorCANBase(can, rx_id) {
+  can->RegisterRxCallback(rx_id, can_motor_callback, this);
+}
+/* implements data update callback */
+void Motor3510::UpdateData(const uint8_t data[]) {
+  const int16_t raw_theta = data[0] << 8 | data[1];
+  const int16_t raw_torque = data[2] << 8 | data[3];
 
-  /* implements data printout */
-  void Motor3510::PrintData() const{
-    print("theta: %.4f ", theta_);
-    print("raw_torque: %.4f \r\n", torque_);
-  }
-  
-  /* override base implementation with max current protection */
-  void Motor3510::SetOutput(int16_t val){
-    constexpr int16_t MAX_ABS_CURRENT = 29000;
-    output_ = clip<int16_t>(val,-MAX_ABS_CURRENT,MAX_ABS_CURRENT);
-  }
+  constexpr float THETA_SCALE = 2 * PI / 8192;
+  theta_ = (float)raw_theta * THETA_SCALE;
+  torque_ = (float)raw_torque;
+
+  connection_flag_ = true;
+}
+
+/* implements data printout */
+void Motor3510::PrintData() const {
+  print("theta: %.4f ", theta_);
+  print("raw_torque: %.4f \r\n", torque_);
+}
+
+/* override base implementation with max current protection */
+void Motor3510::SetOutput(int16_t val) {
+  constexpr int16_t MAX_ABS_CURRENT = 29000;
+  output_ = clip<int16_t>(val, -MAX_ABS_CURRENT, MAX_ABS_CURRENT);
+}
 
 //==================================================================================================
 // Motor6020
@@ -312,21 +309,20 @@ void MotorPWMBase::SetOutput(int16_t val) {
 // PDI_HV Servo
 //==================================================================================================
 PDIHV::PDIHV(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq,
-                   uint32_t output_freq, uint32_t idle_throttle)
+             uint32_t output_freq, uint32_t idle_throttle)
     : MotorPWMBase(htim, channel, clock_freq, output_freq, idle_throttle) {
-
 }
 
 void PDIHV::SetOutPutAngle(float degree) {
-        float slope = (2036.0-972.0) / 160.0;
-        int16_t val = int16_t (clip<float>(degree, -80, 80) * slope + 1470);
-        constexpr int16_t MIN_OUTPUT = 972;
-        constexpr int16_t MAX_OUTPUT = 1947;
-//        972 to 1947 for pulse width input u second
-//        -80 to 80 for angle input
+  float slope = (2036.0 - 972.0) / 160.0;
+  int16_t val = int16_t(clip<float>(degree, -80, 80) * slope + 1470);
+  constexpr int16_t MIN_OUTPUT = 972;
+  constexpr int16_t MAX_OUTPUT = 1947;
+  //        972 to 1947 for pulse width input u second
+  //        -80 to 80 for angle input
 
-        this->SetOutput(clip<int16_t>(val, MIN_OUTPUT, MAX_OUTPUT));
-        this->SetOutput(val);
+  this->SetOutput(clip<int16_t>(val, MIN_OUTPUT, MAX_OUTPUT));
+  this->SetOutput(val);
 }
 
 void PDIHV::SetOutput(int16_t val) {
@@ -781,7 +777,7 @@ void Motor4310::TransmitOutput(Motor4310* motors[], uint8_t num_motors) {
     } else {
       RM_EXPECT_TRUE(false, "Invalid mode number!");
     }
-    
+
     motors[i]->can_->Transmit(motors[i]->tx_id_actual_, data, 8);
   }
 }
@@ -812,6 +808,9 @@ void Motor4310::PrintData() {
 float Motor4310::GetTheta() const {
   return theta_;
 }
+float Motor4310::GetThetaDelta(const float target) const {
+  return wrap<float>(target - theta_, -PI, PI);
+}
 
 float Motor4310::GetOmega() const {
   return omega_;
@@ -820,7 +819,7 @@ float Motor4310::GetTorque() const {
   return torque_;
 }
 
-float Motor4310::GetRelativeTarget() const{
+float Motor4310::GetRelativeTarget() const {
   return relative_target_;
 }
 

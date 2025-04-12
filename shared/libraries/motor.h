@@ -33,8 +33,9 @@ constexpr int MOTOR_RANGE = 30000;  // TODO: 32767 or 30000?
  * @brief two modes for GetTheta()
  *  absolute_mode: -inf to +inf (Default option)
  *  relative_mode: 0 - 2pi
-**/
-enum GetThetaMode {absolute_mode, relative_mode};
+ **/
+enum GetThetaMode { absolute_mode,
+                    relative_mode };
 
 int16_t ClipMotorRange(float output);
 
@@ -209,14 +210,10 @@ class Motor3508 : public MotorCANBase {
 
   uint16_t GetTemp() const override final;
 
-  
-
  private:
   volatile int16_t raw_current_get_ = 0;
   volatile uint8_t raw_temperature_ = 0;
 };
-
-
 
 //==================================================================================================
 // Motor 3510
@@ -236,11 +233,9 @@ class Motor3510 : public MotorCANBase {
   /* override base implementation with max current protection */
   void SetOutput(int16_t val) override final;
 
-
  private:
   volatile float torque_ = 0; /* Torque Value*/
   volatile float previous_position_ = 0;
- 
 };
 
 //==================================================================================================
@@ -343,7 +338,7 @@ class MotorPWMBase : public MotorBase {
 class PDIHV : public MotorPWMBase {
  public:
   PDIHV(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq, uint32_t output_freq,
-           uint32_t idle_throttle);
+        uint32_t idle_throttle);
   /* override base implementation with max angle */
   void SetOutPutAngle(float deg);
   void SetOutput(int16_t val) override final;
@@ -361,8 +356,6 @@ class Motor2305 : public MotorPWMBase {
   /* override base implementation with max current protection */
   void SetOutput(int16_t val) override final;
 };
-
-
 
 //==================================================================================================
 // ServoMotor
@@ -581,11 +574,11 @@ class ServoMotor {
 
   // jam detection
   jam_callback_t jam_callback_; /* callback function that will be invoked if motor jammed */
-  int detect_head_;     /* circular buffer current head                                       */
-  int detect_period_;   /* circular buffer length                                             */
-  int detect_total_;    /* rolling sum of motor inputs                                        */
-  int jam_threshold_;   /* threshold for rolling sum for the motor to be considered as jammed */
-  int16_t* detect_buf_; /* circular buffer                                                    */
+  int detect_head_;             /* circular buffer current head                                       */
+  int detect_period_;           /* circular buffer length                                             */
+  int detect_total_;            /* rolling sum of motor inputs                                        */
+  int jam_threshold_;           /* threshold for rolling sum for the motor to be considered as jammed */
+  int16_t* detect_buf_;         /* circular buffer                                                    */
 
   // pid controllers
   ConstrainedPID omega_pid_; /* pid for controlling speed of motor */
@@ -593,8 +586,8 @@ class ServoMotor {
   // edge detectors
   FloatEdgeDetector* inner_wrap_detector_; /* detect motor motion across encoder boarder */
   FloatEdgeDetector* outer_wrap_detector_; /* detect motor motion across encoder boarder */
-  BoolEdgeDetector* hold_detector_; /* detect motor is in mode toggling, reset pid accordingly  */
-  BoolEdgeDetector* jam_detector_;  /* detect motor jam toggling, call jam callback accordingly */
+  BoolEdgeDetector* hold_detector_;        /* detect motor is in mode toggling, reset pid accordingly  */
+  BoolEdgeDetector* jam_detector_;         /* detect motor jam toggling, call jam callback accordingly */
 };
 
 //==================================================================================================
@@ -608,11 +601,11 @@ typedef bool (*align_detect_t)(void);
  * @brief structure used when steering motor instance is initialized
  */
 typedef struct {
-  MotorCANBase* motor;              /* motor instance to be wrapped as a servomotor       */
-  float max_speed;                  /* max turning speed of motor shaft, in [rad/s]       */
-  float max_acceleration;           /* desired acceleration of motor shaft, in [rad/s^2]  */
-  float transmission_ratio;         /* transmission ratio of motor                        */
-  float* omega_pid_param;           /* pid parameter used to control speed of motor       */
+  MotorCANBase* motor;      /* motor instance to be wrapped as a servomotor       */
+  float max_speed;          /* max turning speed of motor shaft, in [rad/s]       */
+  float max_acceleration;   /* desired acceleration of motor shaft, in [rad/s^2]  */
+  float transmission_ratio; /* transmission ratio of motor                        */
+  float* omega_pid_param;   /* pid parameter used to control speed of motor       */
   float max_iout;
   float max_out;
   align_detect_t align_detect_func; /* function pointer for calibration function*/
@@ -701,12 +694,12 @@ class SteeringMotor {
  private:
   ServoMotor* servo_;
 
-  align_detect_t align_detect_func_;/* function pointer for the calibration sensor, see comments for align_detect_t typedef */
-  float calibrate_offset_;          /* difference between calibration sensor and desired starting position                  */
-  float current_target_;            /* current absolute position in [rad] to drive the underlying servo motor               */
+  align_detect_t align_detect_func_; /* function pointer for the calibration sensor, see comments for align_detect_t typedef */
+  float calibrate_offset_;           /* difference between calibration sensor and desired starting position                  */
+  float current_target_;             /* current absolute position in [rad] to drive the underlying servo motor               */
 
-  float align_angle_;               /* store calibration angle                                                              */
-  bool align_complete_;             /* if calibration is previously done, use the align_angle_                              */
+  float align_angle_;   /* store calibration angle                                                              */
+  bool align_complete_; /* if calibration is previously done, use the align_angle_                              */
 };
 
 //==================================================================================================
@@ -808,6 +801,16 @@ class Motor4310 {
    * @return radian angle
    */
   float GetTheta() const;
+
+  /**
+   * @brief get angle difference (target - actual), in [rad]
+   *
+   * @param target  target angle, in [rad]
+   *
+   * @return angle difference, range between [-PI, PI]
+   */
+  float GetThetaDelta(const float target) const;
+
   /**
    * @brief get motor angular velocity, in [rad / s]
    * @return radian angular velocity

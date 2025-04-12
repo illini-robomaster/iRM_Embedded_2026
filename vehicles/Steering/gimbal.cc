@@ -34,15 +34,13 @@
 #include "dbus.h"
 #include "i2c.h"
 #include "main.h"
+// #include "minipc_protocol.h"
 #include "motor.h"
 #include "oled.h"
 #include "protocol.h"
 #include "rgb.h"
 #include "shooter.h"
-#include "stepper.h"
-#include "minipc_protocol.h"
-
-
+// #include "stepper.h"
 
 static bsp::CAN* can1 = nullptr;
 static bsp::CAN* can2 = nullptr;
@@ -57,7 +55,7 @@ static const int KILLALL_DELAY = 100;
 static const int DEFAULT_TASK_DELAY = 100;
 static const int SOFT_START_CONSTANT = 300;
 static const int SOFT_KILL_CONSTANT = 200;
-static const float START_PITCH_POS = PI/5;
+static const float START_PITCH_POS = PI / 5;
 static const int INFANTRY_INITIAL_HP = 100;
 
 static bsp::CanBridge* send = nullptr;
@@ -159,9 +157,9 @@ const osThreadAttr_t gimbalTaskAttribute = {.name = "gimbalTask",
                                             .reserved = 0};
 osThreadId_t gimbalTaskHandle;
 
-//static control::MotorCANBase* pitch_motor = nullptr;
+// static control::MotorCANBase* pitch_motor = nullptr;
 static control::Motor4310* pitch_motor = nullptr;
-static control::MotorCANBase* yaw_motor = nullptr;
+static control::Motor4310* yaw_motor = nullptr;
 static control::Gimbal* gimbal = nullptr;
 static control::gimbal_data_t* gimbal_param = nullptr;
 static bsp::Laser* laser = nullptr;
@@ -169,7 +167,7 @@ static bsp::Laser* laser = nullptr;
 void gimbalTask(void* arg) {
   UNUSED(arg);
 
-  control::MotorCANBase* motors_can1_gimbal[] = {yaw_motor};
+  control::Motor4310* motors_can1_gimbal[] = {yaw_motor};
   control::Motor4310* motors_can1_pitch[] = {pitch_motor};
 
   print("Wait for beginning signal...\r\n");
@@ -180,13 +178,13 @@ void gimbalTask(void* arg) {
     if (dbus->keyboard.bit.B || dbus->swr == remote::DOWN) break;
     osDelay(100);
   }
-  
+
   // to avoid the zero drifting problem
   int i = 0;
   while (i < 1000 || !imu->DataReady()) {
     gimbal->TargetAbsWOffset(0, 0);
     gimbal->Update();
-    control::MotorCANBase::TransmitOutput(motors_can1_gimbal, 1);
+    control::Motor4310::TransmitOutput(motors_can1_gimbal, 1);
     osDelay(GIMBAL_TASK_DELAY);
     ++i;
   }
@@ -196,10 +194,10 @@ void gimbalTask(void* arg) {
 
   // 4310 soft start
   pitch_motor->SetRelativeTarget(0);
-  for (int j = 0; j < SOFT_START_CONSTANT; j++){
+  for (int j = 0; j < SOFT_START_CONSTANT; j++) {
     gimbal->TargetAbsWOffset(0, 0);
     gimbal->Update();
-    control::MotorCANBase::TransmitOutput(motors_can1_gimbal, 1);
+    control::Motor4310::TransmitOutput(motors_can1_gimbal, 1);
     pitch_motor->SetRelativeTarget(pitch_motor->GetRelativeTarget() + START_PITCH_POS / SOFT_START_CONSTANT);  // increase position gradually
     pitch_motor->SetOutput(pitch_motor->GetRelativeTarget(), 1, 115, 0.5, 0);
     control::Motor4310::TransmitOutput(motors_can1_pitch, 1);
@@ -211,13 +209,13 @@ void gimbalTask(void* arg) {
   laser->Off();
   gimbal->TargetAbsWOffset(0, 0);
   gimbal->Update();
-  control::MotorCANBase::TransmitOutput(motors_can1_gimbal, 1);
+  control::Motor4310::TransmitOutput(motors_can1_gimbal, 1);
   imu->Calibrate();
 
   while (!imu->DataReady() || !imu->CaliDone()) {
     gimbal->TargetAbsWOffset(0, 0);
     gimbal->Update();
-    control::MotorCANBase::TransmitOutput(motors_can1_gimbal, 1);
+    control::Motor4310::TransmitOutput(motors_can1_gimbal, 1);
     pitch_motor->SetOutput(pitch_motor->GetRelativeTarget(), 1, 115, 0.5, 0);
     control::Motor4310::TransmitOutput(motors_can1_pitch, 1);
     osDelay(GIMBAL_TASK_DELAY);
@@ -268,7 +266,7 @@ void gimbalTask(void* arg) {
       yaw_ratio += -dbus->ch2 / 660.0 / 210.0;
 
       pitch_target = clip<float>(pitch_target + pitch_ratio, -gimbal_param->pitch_max_,
-                                gimbal_param->pitch_max_);
+                                 gimbal_param->pitch_max_);
       yaw_target = wrap<float>(yaw_target + yaw_ratio, -PI, PI);
 
       pitch_vel = -1 * clip<float>(dbus->ch3 / 660.0, -15, 15);
@@ -278,7 +276,7 @@ void gimbalTask(void* arg) {
     if (pitch_reset) {
       // 4310 soft start
       pitch_motor->SetRelativeTarget(0);
-      for (int j = 0; j < SOFT_START_CONSTANT; j++){
+      for (int j = 0; j < SOFT_START_CONSTANT; j++) {
         pitch_motor->SetRelativeTarget(pitch_motor->GetRelativeTarget() + START_PITCH_POS / SOFT_START_CONSTANT);  // increase position gradually
         pitch_motor->SetOutput(pitch_motor->GetRelativeTarget(), 1, 115, 0.5, 0);
         control::Motor4310::TransmitOutput(motors_can1_pitch, 1);
@@ -294,14 +292,14 @@ void gimbalTask(void* arg) {
     pitch_diff = clip<float>(pitch_target - pitch_curr, -PI, PI);
     yaw_diff = wrap<float>(yaw_target - yaw_curr, -PI, PI);
 
-    pitch_pos = clip<float>(pitch_pos, 0.1, 1); // measured range
+    pitch_pos = clip<float>(pitch_pos, 0.1, 1);  // measured range
 
     // TODO: pitch_diff is actually no longer used by the gimbal
     gimbal->TargetRel(-pitch_diff, yaw_diff);
     gimbal->Update();
 
     pitch_motor->SetOutput(pitch_pos, pitch_vel, 115, 0.5, 0);
-    control::MotorCANBase::TransmitOutput(motors_can1_gimbal, 1);
+    control::Motor4310::TransmitOutput(motors_can1_gimbal, 1);
     control::Motor4310::TransmitOutput(motors_can1_pitch, 1);
     osDelay(GIMBAL_TASK_DELAY);
   }
@@ -356,14 +354,14 @@ void refereeTask(void* arg) {
 #define JETSON_RX_SIGNAL (1 << 2)
 
 const osThreadAttr_t jetsonCommTaskAttribute = {.name = "jetsonCommTask",
-                                             .attr_bits = osThreadDetached,
-                                             .cb_mem = nullptr,
-                                             .cb_size = 0,
-                                             .stack_mem = nullptr,
-                                             .stack_size = 512 * 4,
-                                             .priority = (osPriority_t)osPriorityHigh,
-                                             .tz_module = 0,
-                                             .reserved = 0};
+                                                .attr_bits = osThreadDetached,
+                                                .cb_mem = nullptr,
+                                                .cb_size = 0,
+                                                .stack_mem = nullptr,
+                                                .stack_size = 512 * 4,
+                                                .priority = (osPriority_t)osPriorityHigh,
+                                                .tz_module = 0,
+                                                .reserved = 0};
 osThreadId_t jetsonCommTaskHandle;
 
 class CustomUART : public bsp::UART {
@@ -377,55 +375,55 @@ class CustomUART : public bsp::UART {
 
 void jetsonCommTask(void* arg) {
   UNUSED(arg);
-// Comment because of upstream AutoaimProtocol Class rewrite in progress
-// youhy, 2023.10
-//
-//  uint32_t length;
-//  uint8_t* data;
-//
-//  auto uart = std::make_unique<CustomUART>(&huart1);  // see cmake for which uart
-//  uart->SetupRx(50);
-//  uart->SetupTx(50);
-//
-//  auto miniPCreceiver = communication::AutoaimProtocol();
-//
-//  while (!imu->CaliDone()) {
-//    osDelay(10);
-//  }
-//
-//  int total_receive_count = 0;
-//
-//  while (true) {
-//    uint32_t flags = osThreadFlagsGet();
-//    if (flags & JETSON_RX_SIGNAL) {
-//      /* time the non-blocking rx / tx calls (should be <= 1 osTick) */
-//
-//      // max length of the UART buffer at 150Hz is ~50 bytes
-//      length = uart->Read(&data);
-//
-//      miniPCreceiver.Receive(data, length);
-//
-//      if (miniPCreceiver.get_valid_flag()) {
-//        // there is at least one unprocessed valid packet
-//        abs_yaw_jetson = miniPCreceiver.get_relative_yaw();
-//        abs_pitch_jetson = miniPCreceiver.get_relative_pitch();
-//        total_receive_count++;
-//      }
-//    }
-//    // send IMU data anyway
-//    communication::STMToJetsonData packet_to_send;
-//    uint8_t my_color; // 1 for blue; 0 for red
-//    if (send->is_my_color_blue) {
-//      my_color = 1;
-//    } else {
-//      my_color = 0;
-//    }
-//    const float pitch_curr = pitch_pos;
-//    const float yaw_curr = imu->INS_angle[0];
-//    miniPCreceiver.Send(&packet_to_send, my_color, yaw_curr, pitch_curr, 0);
-//    uart->Write((uint8_t*)&packet_to_send, sizeof(communication::STMToJetsonData));
-//    osDelay(2);
-//  }
+  // Comment because of upstream AutoaimProtocol Class rewrite in progress
+  // youhy, 2023.10
+  //
+  //  uint32_t length;
+  //  uint8_t* data;
+  //
+  //  auto uart = std::make_unique<CustomUART>(&huart1);  // see cmake for which uart
+  //  uart->SetupRx(50);
+  //  uart->SetupTx(50);
+  //
+  //  auto miniPCreceiver = communication::AutoaimProtocol();
+  //
+  //  while (!imu->CaliDone()) {
+  //    osDelay(10);
+  //  }
+  //
+  //  int total_receive_count = 0;
+  //
+  //  while (true) {
+  //    uint32_t flags = osThreadFlagsGet();
+  //    if (flags & JETSON_RX_SIGNAL) {
+  //      /* time the non-blocking rx / tx calls (should be <= 1 osTick) */
+  //
+  //      // max length of the UART buffer at 150Hz is ~50 bytes
+  //      length = uart->Read(&data);
+  //
+  //      miniPCreceiver.Receive(data, length);
+  //
+  //      if (miniPCreceiver.get_valid_flag()) {
+  //        // there is at least one unprocessed valid packet
+  //        abs_yaw_jetson = miniPCreceiver.get_relative_yaw();
+  //        abs_pitch_jetson = miniPCreceiver.get_relative_pitch();
+  //        total_receive_count++;
+  //      }
+  //    }
+  //    // send IMU data anyway
+  //    communication::STMToJetsonData packet_to_send;
+  //    uint8_t my_color; // 1 for blue; 0 for red
+  //    if (send->is_my_color_blue) {
+  //      my_color = 1;
+  //    } else {
+  //      my_color = 0;
+  //    }
+  //    const float pitch_curr = pitch_pos;
+  //    const float yaw_curr = imu->INS_angle[0];
+  //    miniPCreceiver.Send(&packet_to_send, my_color, yaw_curr, pitch_curr, 0);
+  //    uart->Write((uint8_t*)&packet_to_send, sizeof(communication::STMToJetsonData));
+  //    osDelay(2);
+  //  }
 }
 
 //==================================================================================================
@@ -478,37 +476,35 @@ void shooterTask(void* arg) {
     } else if (GimbalDead) {
       shooter->DialStop();
     } else if (send->shooter_power) {
-        // for manual antijam 
-        Antijam.input(dbus->keyboard.bit.G);
-        // slow shooting
-        if (dbus->mouse.l || dbus->swr == remote::UP) {
-          shooter->SlowContinueShoot();
+      // for manual antijam
+      Antijam.input(dbus->keyboard.bit.G);
+      // slow shooting
+      if (dbus->mouse.l || dbus->swr == remote::UP) {
+        shooter->SlowContinueShoot();
         // fast shooting
-        } else if ((dbus->mouse.r || dbus->wheel.wheel > remote::WheelDigitalValue)
-                  && send->cooling_heat1 < send->cooling_limit1 - 24) {
-          shooter->FastContinueShoot();
+      } else if ((dbus->mouse.r || dbus->wheel.wheel > remote::WheelDigitalValue) && send->cooling_heat1 < send->cooling_limit1 - 24) {
+        shooter->FastContinueShoot();
         // triple shooting
-        } else if (dbus->wheel.wheel == remote::WheelDigitalValue
-                   && dbus->previous_wheel_value == remote::WheelDigitalValue) {
-          if (!triple_shoot_detect) {
-            triple_shoot_detect = true;          
-            shooter->TripleShoot();
-          }
-        // manual antijam
-        } else if (Antijam.posEdge()) {
-          shooter->Antijam();
-        // stop
-        } else {
-          shooter->DialStop();
-          triple_shoot_detect = false;
+      } else if (dbus->wheel.wheel == remote::WheelDigitalValue && dbus->previous_wheel_value == remote::WheelDigitalValue) {
+        if (!triple_shoot_detect) {
+          triple_shoot_detect = true;
+          shooter->TripleShoot();
         }
-        dbus->previous_wheel_value = dbus->wheel.wheel;
+        // manual antijam
+      } else if (Antijam.posEdge()) {
+        shooter->Antijam();
+        // stop
+      } else {
+        shooter->DialStop();
+        triple_shoot_detect = false;
+      }
+      dbus->previous_wheel_value = dbus->wheel.wheel;
     }
 
     if (GimbalDead) {
-        flywheelFlag = false;
-        shooter->SetFlywheelSpeed(0);
-    } else { 
+      flywheelFlag = false;
+      shooter->SetFlywheelSpeed(0);
+    } else {
       if (!send->shooter_power || dbus->keyboard.bit.Q || dbus->swr == remote::DOWN) {
         flywheelFlag = false;
         shooter->SetFlywheelSpeed(0);
@@ -635,14 +631,14 @@ static bsp::BuzzerNoteDelayed Mario[] = {
 
 static bsp::Buzzer* buzzer = nullptr;
 static display::OLED* OLED = nullptr;
-//simple bitmask function for chassis flag
+// simple bitmask function for chassis flag
 void selfTestTask(void* arg) {
   UNUSED(arg);
   osDelay(100);
-  //Try to make the chassis Flags initialized at first.
+  // Try to make the chassis Flags initialized at first.
 
-  //Could need more time to test it out.
-  //The self test task for chassis will not update after the first check.
+  // Could need more time to test it out.
+  // The self test task for chassis will not update after the first check.
   OLED->ShowIlliniRMLOGO();
   buzzer->SingSong(Mario, [](uint32_t milli) { osDelay(milli); });
   OLED->OperateGram(display::PEN_CLEAR);
@@ -663,13 +659,12 @@ void selfTestTask(void* arg) {
 
   OLED->ShowString(1, 12, (uint8_t*)"FL");
   OLED->ShowString(2, 12, (uint8_t*)"FR");
-//
+  //
   OLED->ShowString(3, 12, (uint8_t*)"BL");
   OLED->ShowString(4, 12, (uint8_t*)"BR");
 
   char temp[6] = "";
   while (true) {
-
     osDelay(100);
     pitch_motor->connection_flag_ = false;
     yaw_motor->connection_flag_ = false;
@@ -689,21 +684,21 @@ void selfTestTask(void* arg) {
     chassis_flag_bitmap = send->chassis_flag;
 
     fl_wheel_flag = (0x80 & chassis_flag_bitmap);
-    //motor 8
+    // motor 8
     fr_wheel_flag = (0x40 & chassis_flag_bitmap);
-    //motor 7
+    // motor 7
     bl_wheel_flag = (0x20 & chassis_flag_bitmap);
-    //motor 6
+    // motor 6
     br_wheel_flag = (0x10 & chassis_flag_bitmap);
-    //motor 5
+    // motor 5
     fl_steering_flag = (0x08 & chassis_flag_bitmap);
-    //motor 4
+    // motor 4
     fr_steering_flag = (0x04 & chassis_flag_bitmap);
-    //motor 3
+    // motor 3
     br_steering_flag = (0x02 & chassis_flag_bitmap);
-    //motor 2
+    // motor 2
     bl_steering_flag = (0x01 & chassis_flag_bitmap);
-    //motor 1
+    // motor 1
 
     //    fl_wheel_flag = send->selfCheck_flag;
     calibration_flag = imu->CaliDone();
@@ -724,19 +719,19 @@ void selfTestTask(void* arg) {
 
     OLED->ShowBlock(1, 18, fl_wheel_flag);
 
-    OLED->ShowBlock(1,15,fl_steering_flag);
+    OLED->ShowBlock(1, 15, fl_steering_flag);
 
     OLED->ShowBlock(2, 18, fr_wheel_flag);
 
-    OLED->ShowBlock(2,15,fr_steering_flag);
+    OLED->ShowBlock(2, 15, fr_steering_flag);
 
     OLED->ShowBlock(3, 18, bl_wheel_flag);
 
-    OLED->ShowBlock(3,15,bl_steering_flag);
+    OLED->ShowBlock(3, 15, bl_steering_flag);
 
     OLED->ShowBlock(4, 18, br_wheel_flag);
 
-    OLED->ShowBlock(4,15,br_steering_flag);
+    OLED->ShowBlock(4, 15, br_steering_flag);
 
     OLED->RefreshGram();
 
@@ -782,10 +777,10 @@ void RM_RTOS_Init(void) {
 
   laser = new bsp::Laser(LASER_GPIO_Port, LASER_Pin);
   pitch_motor = new control::Motor4310(can1, 0x02, 0x01, control::MIT);
-  yaw_motor = new control::Motor6020(can1, 0x206);
+  yaw_motor = new control::Motor4310(can1, 0x04, 0x03, control::MIT);
   control::gimbal_t gimbal_data;
   gimbal_data.pitch_motor_4310_ = pitch_motor;
-  gimbal_data.yaw_motor = yaw_motor;
+  gimbal_data.yaw_motor_4310_ = yaw_motor;
   gimbal_data.model = control::GIMBAL_STEERING_4310;
   gimbal = new control::Gimbal(gimbal_data);
   gimbal_param = gimbal->GetData();
@@ -826,8 +821,8 @@ void RM_RTOS_Threads_Init(void) {
 void KillAll() {
   RM_EXPECT_TRUE(false, "Operation Killed!\r\n");
 
-  control::MotorCANBase* motors_can2_gimbal[] = {yaw_motor};
   control::MotorCANBase* motors_can1_shooter[] = {sl_motor, sr_motor, ld_motor};
+  control::Motor4310* motors_can2_gimbal[] = {yaw_motor};
   control::Motor4310* motors_can1_pitch[] = {pitch_motor};
 
   RGB->Display(display::color_blue);
@@ -850,7 +845,7 @@ void KillAll() {
 
     // 4310 soft kill
     pitch_motor->SetRelativeTarget(pitch_pos);
-    for (int j = 0; j < SOFT_KILL_CONSTANT; j++){
+    for (int j = 0; j < SOFT_KILL_CONSTANT; j++) {
       pitch_motor->SetRelativeTarget(pitch_motor->GetRelativeTarget() - START_PITCH_POS / SOFT_KILL_CONSTANT);  // increase position gradually
       pitch_motor->SetOutput(pitch_motor->GetRelativeTarget(), 1, 115, 0.5, 0);
       control::Motor4310::TransmitOutput(motors_can1_pitch, 1);
@@ -861,7 +856,7 @@ void KillAll() {
     pitch_motor->MotorDisable();
 
     yaw_motor->SetOutput(0);
-    control::MotorCANBase::TransmitOutput(motors_can2_gimbal, 1);
+    control::Motor4310::TransmitOutput(motors_can2_gimbal, 1);
 
     sl_motor->SetOutput(0);
     sr_motor->SetOutput(0);
@@ -886,7 +881,7 @@ void KillGimbal() {
 
     // 4310 soft kill
     pitch_motor->SetRelativeTarget(pitch_pos);
-    for (int j = 0; j < SOFT_KILL_CONSTANT; j++){
+    for (int j = 0; j < SOFT_KILL_CONSTANT; j++) {
       pitch_motor->SetRelativeTarget(pitch_motor->GetRelativeTarget() - START_PITCH_POS / SOFT_KILL_CONSTANT);  // increase position gradually
       pitch_motor->SetOutput(pitch_motor->GetRelativeTarget(), 1, 115, 0.5, 0);
       control::Motor4310::TransmitOutput(motors_can1_pitch, 1);
@@ -943,7 +938,6 @@ void RM_RTOS_Default_Task(const void* arg) {
 
       print("CH0: %-4d CH1: %-4d CH2: %-4d CH3: %-4d ", dbus->ch0, dbus->ch1, dbus->ch2, dbus->ch3);
       print("SWL: %d SWR: %d @ %d ms\r\n", dbus->swl, dbus->swr, dbus->timestamp);
-
     }
 
     osDelay(DEFAULT_TASK_DELAY);

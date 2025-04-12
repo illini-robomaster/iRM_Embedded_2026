@@ -9,6 +9,7 @@ Gimbal::Gimbal(gimbal_t gimbal)
     : pitch_detector_(BoolEdgeDetector(false)), yaw_detector_(BoolEdgeDetector(false)) {
   // acquired from user
   pitch_motor_4310_ = gimbal.pitch_motor_4310_;
+  yaw_motor_4310_ = gimbal.yaw_motor_4310_;
   pitch_motor_ = gimbal.pitch_motor;
   yaw_motor_ = gimbal.yaw_motor;
   model_ = gimbal.model;
@@ -110,13 +111,13 @@ Gimbal::Gimbal(gimbal_t gimbal)
   // nullptr guard
   switch (gimbal.model) {
     case GIMBAL_STEERING_4310:
-      if (yaw_theta_pid_param_   == nullptr || yaw_omega_pid_param_ == nullptr) {
+      if (yaw_theta_pid_param_ == nullptr || yaw_omega_pid_param_ == nullptr) {
         RM_ASSERT_TRUE(false, "Not Supported Gimbal Mode\r\n");
       }
       break;
     default:
       if (pitch_theta_pid_param_ == nullptr || pitch_omega_pid_param_ == nullptr ||
-          yaw_theta_pid_param_   == nullptr || yaw_omega_pid_param_ == nullptr) {
+          yaw_theta_pid_param_ == nullptr || yaw_omega_pid_param_ == nullptr) {
         RM_ASSERT_TRUE(false, "Not Supported Gimbal Mode\r\n");
       }
   }
@@ -213,7 +214,7 @@ void Gimbal::TargetAbsWOffset(float abs_pitch, float abs_yaw) {
       float clipped_yaw = clip<float>(abs_yaw, -data_.yaw_max_, data_.yaw_max_);
       pitch_angle_ = wrapping_clip<float>(clipped_pitch + data_.pitch_offset_, pitch_lower_limit_,
                                           pitch_upper_limit_, 0, 2 * PI);
-      yaw_angle_ = wrapping_clip<float>(clipped_yaw + data_.yaw_offset_, yaw_lower_limit_,yaw_upper_limit_, 0, 2 * PI);
+      yaw_angle_ = wrapping_clip<float>(clipped_yaw + data_.yaw_offset_, yaw_lower_limit_, yaw_upper_limit_, 0, 2 * PI);
   }
 }
 

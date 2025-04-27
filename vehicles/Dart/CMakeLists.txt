@@ -24,3 +24,7 @@ project(Steering ASM C CXX)
 irm_add_arm_executable(dart_gimbal
         TARGET DJI_Board_TypeC
         SOURCES dart_gimbal.cc)
+
+irm_add_arm_executable(dart_gimbal_load_test
+        TARGET DJI_Board_TypeC
+        SOURCES dart_loading_example.cc)

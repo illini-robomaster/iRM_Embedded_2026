@@ -25,6 +25,7 @@
 #include "bsp_os.h"
 #include "utils.h"
 
+int16_t motor_val;
 using namespace bsp;
 
 namespace control {
@@ -88,7 +89,7 @@ void MotorCANBase::TransmitOutput(MotorCANBase* motors[], uint8_t num_motors) {
     data[2 * motor_idx] = output >> 8;
     data[2 * motor_idx + 1] = output & 0xFF;
   }
-
+  motor_val = motors[0]->output_;
   motors[0]->can_->Transmit(motors[0]->tx_id_, data, 8);
 }
 
@@ -138,7 +139,7 @@ void Motor3508::PrintData() const {
 }
 
 void Motor3508::SetOutput(int16_t val) {
-  constexpr int16_t MAX_ABS_CURRENT = 12288;  // ~20A
+  constexpr int16_t MAX_ABS_CURRENT = 14690;  // ~20A
   output_ = clip<int16_t>(val, -MAX_ABS_CURRENT, MAX_ABS_CURRENT);
 }
 

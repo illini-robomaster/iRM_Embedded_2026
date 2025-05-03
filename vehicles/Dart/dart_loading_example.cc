@@ -42,8 +42,10 @@
 #define TIM_CLOCK_FREQ 1000000
 #define MOTOR_OUT_FREQ 50
 
+#define MAX_IOUT 16384
+#define MAX_OUT 60000
 
-#define MAP_RANGE(x, in_min, in_max, out_min, out_max) ((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min)
+#define MAP_RANGE(x, in_min, in_max, out_min, out_max) (((float)(x) - (float)(in_min)) * ((float)(out_max) - (float)(out_min)) / ((float)(in_max) - (float)(in_min)) + (float)(out_min))
 
 osThreadId_t dartLoadTaskHandle;
 const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
@@ -63,38 +65,62 @@ control::MotorPWMBase* claw_motor = nullptr;
 control::MotorPWMBase* loader_joint1 = nullptr;
 control::MotorPWMBase* loader_joint2 = nullptr;
 
+control::MotorCANBase* slide_motor = nullptr;
+
 static remote::DBUS *dbus = nullptr;
 
+static bsp::CAN* can1 = nullptr;
+
+float Kp_slide = 50;
+float Ki_slide = 15;
+float Kd_slide = 65;
+float diff_output = 0;
 
 void dartLoadTask(void*arg){
   UNUSED(arg);
   int joint1_output = 900;
   int joint2_output = 0;
+  float slide_speed = 0;
+
+  control::MotorCANBase* slide_[] = {slide_motor};
+  float diff_slide = 0;
+  float param[] = {Kp_slide, Ki_slide, Kd_slide};
+  control::ConstrainedPID pid(param, MAX_IOUT, MAX_OUT);
 
   while(1){
-    if (dbus->swl == remote::UP){
+    if (dbus->swl == remote::UP) {
       claw_motor->SetOutput(1000);
     } else {
       claw_motor->SetOutput(500);
     }
     // joint1_output = MAP_RANGE(dbus->ch3, -660, 660, 500, 2500);
     joint2_output = MAP_RANGE(dbus->ch1, -660, 660, 500, 2500);
-    loader_joint1->SetOutput(joint1_output);
+    slide_speed = MAP_RANGE(dbus->ch2, -660, 660, -50, 50);
+    // loader_joint1->SetOutput(joint1_output);
     loader_joint2->SetOutput(joint2_output);
+
+    diff_slide = slide_motor->GetOmegaDelta(slide_speed);
+    diff_output = pid.ComputeConstrainedOutput(diff_slide);
+    slide_motor->SetOutput(diff_output);
+    control::MotorCANBase::TransmitOutput(slide_, 1);
+
     print("joint1: %d\r\n", joint1_output);
     print("joint2: %d\r\n", joint2_output);
-    osDelay(20);
+    print("slide speed: %d , diff_slide: %.2f, diff_output: %f \r\n", slide_speed, diff_slide, diff_output);
+    osDelay(10);
   }
 }
 
 
 void RM_RTOS_Init(){
   print_use_uart(&huart1);
+
   key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
   claw_motor = new control::MotorPWMBase(&htim1, CLAW_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
   loader_joint1 = new control::MotorPWMBase(&htim1, JOINT1_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
-  
+  can1 = new bsp::CAN(&hcan1);
   loader_joint2 = new control::MotorPWMBase(&htim1, JOINT2_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
+  slide_motor = new control::Motor3508(can1, 0x202);
   dbus = new remote::DBUS(&huart3);
 }
 

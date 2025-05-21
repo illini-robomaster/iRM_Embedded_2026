@@ -115,12 +115,15 @@ void dartLoadTask(void*arg){
 void RM_RTOS_Init(){
   print_use_uart(&huart1);
 
+  can1 = new bsp::CAN(&hcan1);
+
   key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
   claw_motor = new control::MotorPWMBase(&htim1, CLAW_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
   loader_joint1 = new control::MotorPWMBase(&htim1, JOINT1_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
-  can1 = new bsp::CAN(&hcan1);
   loader_joint2 = new control::MotorPWMBase(&htim1, JOINT2_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
+
   slide_motor = new control::Motor3508(can1, 0x202);
+
   dbus = new remote::DBUS(&huart3);
 }
 

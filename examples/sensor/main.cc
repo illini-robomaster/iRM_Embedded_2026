@@ -31,6 +31,7 @@ static bsp::GPIO* input4 = nullptr;
 
 void RM_RTOS_Init(void) {
   print_use_uart(&huart1);
+  
   input1 = new bsp::GPIO(IN1_GPIO_Port, IN1_Pin);
   input2 = new bsp::GPIO(IN2_GPIO_Port, IN2_Pin);
   input3 = new bsp::GPIO(IN3_GPIO_Port, IN3_Pin);

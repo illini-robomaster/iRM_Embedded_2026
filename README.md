@@ -7,7 +7,7 @@ Embedded system development @ Illini RoboMaster
 ## User Guide (Linux / Mac)
 
 You can follow the instructions below to setup the necessary environments for
-building the source code and flashing the embedded chips.
+building the source code and flashing the embedded chips or micron controller units.
 
 ### Install ARM Toolchain
 

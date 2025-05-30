@@ -43,14 +43,18 @@
 #define ABS(x) ((x) > 0 ? (x) : -(x))
 
 bsp::GPIO* key = nullptr;
+
 control::MotorPWMBase* trigger_motor;
-control::MotorCANBase *load_motor;
+control::MotorCANBase* load_motor_1;
+control::MotorCANBase* load_motor_2;
+
 static remote::DBUS *dbus;
 static bsp::CAN *can1 = nullptr;  // for load motor
 
 // variables:
-static int motor1_output = 1500;
-static int16_t load_out = 0;
+static int trigger_motor_output = 1500;
+static int16_t load_motor_1_output = 0;
+static int16_t load_motor_2_output = 0;
 static uint16_t load_motor_temperature = 0;
 static int16_t load_motor_current = 0;
 
@@ -74,9 +78,10 @@ const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
 void dartLoadTask(void *arg) {
   UNUSED(arg);
   float param[] = {Kp_load,Ki_load,Kd_load};
-  control::ConstrainedPID pid(param, MAX_IOUT, MAX_OUT); 
-  control::MotorCANBase* motors_can1_load[] = {load_motor};  // load motor
-  float diff_load = 0;
+  control::ConstrainedPID pid(param, MAX_IOUT, MAX_OUT);
+  control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2};  // load motor
+  float diff_load_1 = 0;
+  float diff_load_2 = 0;
   float load_target_speed = 0;  // target speed for load motor, can be adjusted
 
   while (true) {
@@ -101,13 +106,18 @@ void dartLoadTask(void *arg) {
     }
 
     // Compute the omega delta for PID control
-    diff_load = load_motor->GetOmegaDelta(load_target_speed); // Get the current speed difference
-    load_out = pid.ComputeConstrainedOutput(diff_load);
-    load_motor->SetOutput(load_out);
-    load_motor_temperature = load_motor->GetTemp();
-    load_motor_current = load_motor->GetCurr();
+    diff_load_1 = load_motor_1->GetOmegaDelta(load_target_speed);   // Get the current speed difference
+    diff_load_2 = load_motor_2->GetOmegaDelta(-load_target_speed);  // Get the current speed difference for second motor if needed
 
-    control::MotorCANBase::TransmitOutput(motors_can1_load, 1); // Transmit the output to the load motor
+    load_motor_1_output = pid.ComputeConstrainedOutput(diff_load_1);
+    load_motor_2_output = pid.ComputeConstrainedOutput(diff_load_2);
+
+    load_motor_1->SetOutput(load_motor_1_output);
+    load_motor_2->SetOutput(load_motor_2_output);
+    load_motor_temperature = load_motor_1->GetTemp();
+    load_motor_current = load_motor_1->GetCurr();
+
+    control::MotorCANBase::TransmitOutput(motors_can1_load, 2);  // Transmit the output to the load motor
 
     osDelay(10);
 
@@ -121,10 +131,11 @@ void dartLoadTask(void *arg) {
 void RM_RTOS_Init(){
     print_use_uart(&huart1);
     key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
-    trigger_motor = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, motor1_output);
+    trigger_motor = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, trigger_motor_output);
     trigger_motor->SetOutput(0);
     can1 = new bsp::CAN(&hcan1); // can1 for load motor, make sure to initialize can before motor
-    load_motor = new control::Motor3508(can1, 0x205);
+    load_motor_1 = new control::Motor3508(can1, 0x205);
+    load_motor_2 = new control::Motor3508(can1, 0x206);
     dbus = new remote::DBUS(&huart3);
 
 }

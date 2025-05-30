@@ -134,8 +134,8 @@ void RM_RTOS_Init(){
     trigger_motor = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, trigger_motor_output);
     trigger_motor->SetOutput(0);
     can1 = new bsp::CAN(&hcan1); // can1 for load motor, make sure to initialize can before motor
-    load_motor_1 = new control::Motor3508(can1, 0x205);
-    load_motor_2 = new control::Motor3508(can1, 0x206);
+    load_motor_1 = new control::Motor3508(can1, 0x201);
+    load_motor_2 = new control::Motor3508(can1, 0x202);
     dbus = new remote::DBUS(&huart3);
 
 }

@@ -106,8 +106,8 @@ void dartLoadTask(void *arg) {
     }
 
     // Compute the omega delta for PID control
-    diff_load_1 = load_motor_1->GetOmegaDelta(load_target_speed);   // Get the current speed difference
-    diff_load_2 = load_motor_2->GetOmegaDelta(-load_target_speed);  // Get the current speed difference for second motor if needed
+    diff_load_1 = load_motor_1->GetOmegaDelta(-load_target_speed);  // Get the current speed difference
+    diff_load_2 = load_motor_2->GetOmegaDelta(load_target_speed);   // Get the current speed difference for second motor if needed
 
     load_motor_1_output = pid.ComputeConstrainedOutput(diff_load_1);
     load_motor_2_output = pid.ComputeConstrainedOutput(diff_load_2);
@@ -137,7 +137,6 @@ void RM_RTOS_Init(){
     load_motor_1 = new control::Motor3508(can1, 0x201);
     load_motor_2 = new control::Motor3508(can1, 0x202);
     dbus = new remote::DBUS(&huart3);
-
 }
 
 

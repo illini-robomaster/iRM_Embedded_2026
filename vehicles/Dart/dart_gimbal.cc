@@ -56,8 +56,11 @@ static bsp::CAN* can1 = nullptr;  // for load motor
 
 // variables:
 static int trigger_motor_output = 1500;
+
 static int16_t load_motor_1_output = 0;
 static int16_t load_motor_2_output = 0;
+static int16_t force_motor_output = 0;
+
 static uint16_t load_motor_temperature = 0;
 static int16_t load_motor_current = 0;
 
@@ -84,9 +87,10 @@ void dartLoadTask(void* arg) {
   control::ConstrainedPID pid_left(param, MAX_IOUT, MAX_OUT);
   control::ConstrainedPID pid_right(param, MAX_IOUT, MAX_OUT);
   control::ConstrainedPID pid_force(param, MAX_IOUT, MAX_OUT);
-  control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2};  // load motor
+  control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2, force_motor};  // load motor
   float diff_load_1 = 0;
   float diff_load_2 = 0;
+  float diff_force = 0;
   float load_target_speed = 0;   // target speed for load motor, can be adjusted
   float force_target_speed = 0;  // target speed for force motor, can be adjusted
 
@@ -114,19 +118,22 @@ void dartLoadTask(void* arg) {
     // Compute the omega delta for PID control
     diff_load_1 = load_motor_1->GetOmegaDelta(-load_target_speed);  // Get the current speed difference
     diff_load_2 = load_motor_2->GetOmegaDelta(load_target_speed);   // Get the current speed difference for second motor if needed
+    diff_force = force_motor->GetOmegaDelta(force_target_speed);    // Get the current speed difference for force motor
 
     load_motor_1_output = pid_left.ComputeConstrainedOutput(diff_load_1);
     load_motor_2_output = pid_right.ComputeConstrainedOutput(diff_load_2);
+    force_motor_output = pid_force.ComputeConstrainedOutput(diff_force);
 
     load_motor_1->SetOutput(load_motor_1_output);
     load_motor_2->SetOutput(load_motor_2_output);
+    force_motor->SetOutput(0);
     load_motor_temperature = load_motor_1->GetTemp();
     load_motor_current = load_motor_1->GetCurr();
     // print("Load Motor 1 Output: %d, Load Motor 2 Output: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
     //       load_motor_1_output, load_motor_2_output, load_motor_temperature, load_motor_current);
     print("Force Motor Speed: %d, Load Motor 1 Speed: %d, Load Motor 2 Speed: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
           force_target_speed, load_motor_1->GetOmega(), load_motor_2->GetOmega(), load_motor_temperature, load_motor_current);
-    control::MotorCANBase::TransmitOutput(motors_can1_load, 2);  // Transmit the output to the load motor
+    control::MotorCANBase::TransmitOutput(motors_can1_load, 3);  // Transmit the output to the load motor
 
     osDelay(10);
 

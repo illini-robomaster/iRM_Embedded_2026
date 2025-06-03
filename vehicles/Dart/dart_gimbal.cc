@@ -78,7 +78,8 @@ const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
 void dartLoadTask(void *arg) {
   UNUSED(arg);
   float param[] = {Kp_load,Ki_load,Kd_load};
-  control::ConstrainedPID pid(param, MAX_IOUT, MAX_OUT);
+  control::ConstrainedPID pid_left(param, MAX_IOUT, MAX_OUT);
+  control::ConstrainedPID pid_right(param, MAX_IOUT, MAX_OUT);
   control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2};  // load motor
   float diff_load_1 = 0;
   float diff_load_2 = 0;
@@ -102,21 +103,22 @@ void dartLoadTask(void *arg) {
       load_target_speed = -170;
     }
     else {
-      load_target_speed = 0; // stop the load motor when SWL is down
+      load_target_speed = 0;  // stop the load motor when SWL is at mid
     }
 
     // Compute the omega delta for PID control
     diff_load_1 = load_motor_1->GetOmegaDelta(-load_target_speed);  // Get the current speed difference
     diff_load_2 = load_motor_2->GetOmegaDelta(load_target_speed);   // Get the current speed difference for second motor if needed
 
-    load_motor_1_output = pid.ComputeConstrainedOutput(diff_load_1);
-    load_motor_2_output = pid.ComputeConstrainedOutput(diff_load_2);
+    load_motor_1_output = pid_left.ComputeConstrainedOutput(diff_load_1);
+    load_motor_2_output = pid_right.ComputeConstrainedOutput(diff_load_2);
 
     load_motor_1->SetOutput(load_motor_1_output);
     load_motor_2->SetOutput(load_motor_2_output);
     load_motor_temperature = load_motor_1->GetTemp();
     load_motor_current = load_motor_1->GetCurr();
-
+    print("Load Motor 1 Output: %d, Load Motor 2 Output: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
+          load_motor_1_output, load_motor_2_output, load_motor_temperature, load_motor_current);
     control::MotorCANBase::TransmitOutput(motors_can1_load, 2);  // Transmit the output to the load motor
 
     osDelay(10);

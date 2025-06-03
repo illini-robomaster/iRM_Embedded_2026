@@ -42,14 +42,17 @@
 
 #define ABS(x) ((x) > 0 ? (x) : -(x))
 
+#define MAP_RANGE(x, in_min, in_max, out_min, out_max) (((float)(x) - (float)(in_min)) * ((float)(out_max) - (float)(out_min)) / ((float)(in_max) - (float)(in_min)) + (float)(out_min))
+
 bsp::GPIO* key = nullptr;
 
 control::MotorPWMBase* trigger_motor;
 control::MotorCANBase* load_motor_1;
 control::MotorCANBase* load_motor_2;
+control::MotorCANBase* force_motor;
 
-static remote::DBUS *dbus;
-static bsp::CAN *can1 = nullptr;  // for load motor
+static remote::DBUS* dbus;
+static bsp::CAN* can1 = nullptr;  // for load motor
 
 // variables:
 static int trigger_motor_output = 1500;
@@ -65,31 +68,33 @@ float Kd_load = 65;
 
 osThreadId_t dartLoadTaskHandle;
 const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
-        .attr_bits = osThreadDetached,
-        .cb_mem = nullptr,
-        .cb_size = 0,
-        .stack_mem = nullptr,
-        .stack_size = 256 * 4,
-        .priority = (osPriority_t)osPriorityNormal,
-        .tz_module = 0,
-        .reserved = 0};
+                                              .attr_bits = osThreadDetached,
+                                              .cb_mem = nullptr,
+                                              .cb_size = 0,
+                                              .stack_mem = nullptr,
+                                              .stack_size = 256 * 4,
+                                              .priority = (osPriority_t)osPriorityNormal,
+                                              .tz_module = 0,
+                                              .reserved = 0};
 
-
-void dartLoadTask(void *arg) {
+void dartLoadTask(void* arg) {
   UNUSED(arg);
-  float param[] = {Kp_load,Ki_load,Kd_load};
+  float param[] = {Kp_load, Ki_load, Kd_load};
+  // TODO: adjust the PID parameters based on different motor characteristics
   control::ConstrainedPID pid_left(param, MAX_IOUT, MAX_OUT);
   control::ConstrainedPID pid_right(param, MAX_IOUT, MAX_OUT);
+  control::ConstrainedPID pid_force(param, MAX_IOUT, MAX_OUT);
   control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2};  // load motor
   float diff_load_1 = 0;
   float diff_load_2 = 0;
-  float load_target_speed = 0;  // target speed for load motor, can be adjusted
+  float load_target_speed = 0;   // target speed for load motor, can be adjusted
+  float force_target_speed = 0;  // target speed for force motor, can be adjusted
 
   while (true) {
     // This is for the trigger motor
     if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output
       trigger_motor->SetOutput(600);
-      print("trigger on\r\n");
+      // print("trigger on\r\n");
     } else {
       trigger_motor->SetOutput(0);
     }
@@ -97,14 +102,14 @@ void dartLoadTask(void *arg) {
     // Load motor control logic
     if (dbus->swl == remote::UP) {  // when SWL is up, run the load motor
       // Set target speed for load motor
-      load_target_speed = 300; // adjust target speed based on dbus ch3 input
-    } 
-    else if (dbus->swl == remote::DOWN){
+      load_target_speed = 300;  // adjust target speed based on dbus ch3 input
+    } else if (dbus->swl == remote::DOWN) {
       load_target_speed = -170;
-    }
-    else {
+    } else {
       load_target_speed = 0;  // stop the load motor when SWL is at mid
     }
+
+    force_target_speed = MAP_RANGE(dbus->ch3, -660, 660, -300, 300);  // map ch0 to target speed for force motor
 
     // Compute the omega delta for PID control
     diff_load_1 = load_motor_1->GetOmegaDelta(-load_target_speed);  // Get the current speed difference
@@ -117,8 +122,10 @@ void dartLoadTask(void *arg) {
     load_motor_2->SetOutput(load_motor_2_output);
     load_motor_temperature = load_motor_1->GetTemp();
     load_motor_current = load_motor_1->GetCurr();
-    print("Load Motor 1 Output: %d, Load Motor 2 Output: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
-          load_motor_1_output, load_motor_2_output, load_motor_temperature, load_motor_current);
+    // print("Load Motor 1 Output: %d, Load Motor 2 Output: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
+    //       load_motor_1_output, load_motor_2_output, load_motor_temperature, load_motor_current);
+    print("Force Motor Speed: %d, Load Motor 1 Speed: %d, Load Motor 2 Speed: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
+          force_target_speed, load_motor_1->GetOmega(), load_motor_2->GetOmega(), load_motor_temperature, load_motor_current);
     control::MotorCANBase::TransmitOutput(motors_can1_load, 2);  // Transmit the output to the load motor
 
     osDelay(10);
@@ -129,7 +136,6 @@ void dartLoadTask(void *arg) {
   }
 }
 
-
 void RM_RTOS_Init(){
     print_use_uart(&huart1);
     key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
@@ -138,6 +144,7 @@ void RM_RTOS_Init(){
     can1 = new bsp::CAN(&hcan1); // can1 for load motor, make sure to initialize can before motor
     load_motor_1 = new control::Motor3508(can1, 0x201);
     load_motor_2 = new control::Motor3508(can1, 0x202);
+    force_motor = new control::Motor2006(can1, 0x203);  // force motor, can be used for other purposes
     dbus = new remote::DBUS(&huart3);
 }
 

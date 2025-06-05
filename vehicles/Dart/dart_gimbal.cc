@@ -42,6 +42,11 @@
 #define MAX_IOUT 16384
 #define MAX_OUT 60000
 
+#define LOADER_FEED_MOTOR_CONTACT_OUTPUT 1000
+#define LOADER_FEED_MOTOR_RELEASE_OUTPUT -1000
+#define LOADER_SLIDE_MOTOR_DOWN_OUTPUT 0
+#define LOADER_SLIDE_MOTOR_UP_OUTPUT 385
+
 #define ABS(x) ((x) > 0 ? (x) : -(x))
 
 #define MAP_RANGE(x, in_min, in_max, out_min, out_max) (((float)(x) - (float)(in_min)) * ((float)(out_max) - (float)(out_min)) / ((float)(in_max) - (float)(in_min)) + (float)(out_min))
@@ -75,6 +80,9 @@ float Ki_load = 15;
 float Kd_load = 65;
 // thread attributes
 
+// helpers
+void reload_task();
+
 osThreadId_t dartLoadTaskHandle;
 const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
                                               .attr_bits = osThreadDetached,
@@ -107,8 +115,10 @@ void dartLoadTask(void* arg) {
     if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output
       trigger_motor->SetOutput(600);
       // print("trigger on\r\n");
-    } else {
+    } else if (dbus->swr == remote::MID) {  // when SWR is mid, stop the motor
       trigger_motor->SetOutput(0);
+    } else if (dbus->swr == remote::DOWN) {  // when SWR is down, decrease motor output
+      reload_task();                         // reload the dart
     }
 
     // Load motor control logic
@@ -120,11 +130,6 @@ void dartLoadTask(void* arg) {
     } else {
       load_target_speed = 0;  // stop the load motor when SWL is at mid
     }
-    slide_motor_output += MAP_RANGE(dbus->ch0, -660, 660, -10, 10);
-    feed_motor_output += MAP_RANGE(dbus->ch1, -660, 660, -10, 10);
-
-    loader_feed_motor->SetOutput(feed_motor_output);
-    loader_slide_motor->SetOutput(slide_motor_output);
 
     force_target_speed = MAP_RANGE(dbus->ch3, -660, 660, -300, 300);  // map ch0 to target speed for force motor
 
@@ -155,10 +160,16 @@ void dartLoadTask(void* arg) {
     // Load motor control
   }
 }
-void reload_task(void* arg) {
-  UNUSED(arg);
+void reload_task() {
   // When called, this task will reload the dart, which is a fixed action
-
+  // slide motor will move from 0 to 385
+  loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+  osDelay(500);
+  loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
+  osDelay(500);
+  loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+  osDelay(500);
+  loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
   return;
 }
 
@@ -174,6 +185,7 @@ void RM_RTOS_Init(){
     load_motor_2 = new control::Motor3508(can1, 0x202);
     force_motor = new control::Motor2006(can1, 0x203);  // force motor, can be used for other purposes
     dbus = new remote::DBUS(&huart3);
+    loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
 }
 
 

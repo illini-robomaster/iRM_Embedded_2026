@@ -74,6 +74,8 @@ static int16_t load_motor_1_output = 0;
 static int16_t load_motor_2_output = 0;
 static int16_t force_motor_output = 0;
 
+static int16_t loader_catridge_motor_output = 0;  // output for loader catridge motor
+
 static uint16_t load_motor_temperature = 0;
 static int16_t load_motor_current = 0;
 
@@ -103,6 +105,7 @@ void dartLoadTask(void* arg) {
   control::ConstrainedPID pid_left(param, MAX_IOUT, MAX_OUT);
   control::ConstrainedPID pid_right(param, MAX_IOUT, MAX_OUT);
   control::ConstrainedPID pid_force(param, MAX_IOUT, MAX_OUT);
+  control::ConstrainedPID pid_loader_catridge(param, MAX_IOUT, MAX_OUT);
   control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2, force_motor};  // load motor
   control::MotorCANBase* motor_loader_catridge[] = {loader_catridge_motor};               // loader catridge motor
   float diff_load_1 = 0;
@@ -111,6 +114,11 @@ void dartLoadTask(void* arg) {
   float load_target_speed = 0;   // target speed for load motor, can be adjusted
   float force_target_speed = 0;  // target speed for force motor, can be adjusted
   uint8_t curr_state = 0;        // current state of the dart loading mechanism
+
+  float diff_theta_loader_catridge = 0;                   // difference in angle for loader catridge motor
+  float target_theta_loader_catridge = 6.255 - M_PI / 3;  // target angle for loader catridge motor
+
+  diff_theta_loader_catridge = loader_catridge_motor->GetThetaDelta(target_theta_loader_catridge);  // Get the current angle difference
 
   while (true) {
     // This is for the trigger motor
@@ -155,15 +163,20 @@ void dartLoadTask(void* arg) {
     load_motor_2_output = pid_right.ComputeConstrainedOutput(diff_load_2);
     force_motor_output = pid_force.ComputeConstrainedOutput(diff_force);
 
+    loader_catridge_motor_output = pid_loader_catridge.ComputeConstrainedOutput(diff_theta_loader_catridge);
+
     load_motor_1->SetOutput(load_motor_1_output);
     load_motor_2->SetOutput(load_motor_2_output);
     force_motor->SetOutput(0);
+    loader_catridge_motor->SetOutput(loader_catridge_motor_output);
     load_motor_temperature = load_motor_1->GetTemp();
     load_motor_current = load_motor_1->GetCurr();
     control::MotorCANBase::TransmitOutput(motors_can1_load, 3);  // Transmit the output to the load motor
     control::MotorCANBase::TransmitOutput(motor_loader_catridge, 1);  // Transmit the output to the loader catridge motor
+    // Three loading points in theta for 6.255 radian, increase by 0.3333 to clear the passage for dart launch
+    // Then the loader will rotate back to 6.255 radian
 
-    print("loader catridge motor angle: % .4f ", loader_catridge_motor->GetTheta());
+    print("loader catridge motor angle: % .4f \r\n ", loader_catridge_motor->GetTheta());
 
     switch (curr_state) {
       case 0:  // release state

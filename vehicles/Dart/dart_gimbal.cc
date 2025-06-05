@@ -100,6 +100,8 @@ void dartLoadTask(void* arg) {
   float load_target_speed = 0;   // target speed for load motor, can be adjusted
   float force_target_speed = 0;  // target speed for force motor, can be adjusted
 
+  int slide_motor_output = 0;
+  int feed_motor_output = 0;
   while (true) {
     // This is for the trigger motor
     if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output
@@ -118,8 +120,12 @@ void dartLoadTask(void* arg) {
     } else {
       load_target_speed = 0;  // stop the load motor when SWL is at mid
     }
-    loader_slide_motor->SetOutput(dbus->ch1);                         // Set the slide motor output based on ch1 input
-    loader_feed_motor->SetOutput(dbus->ch2);                         // Set the feed motor output based on ch2 input
+    slide_motor_output += MAP_RANGE(dbus->ch0, -660, 660, -10, 10);
+    feed_motor_output += MAP_RANGE(dbus->ch1, -660, 660, -10, 10);
+
+    loader_feed_motor->SetOutput(feed_motor_output);
+    loader_slide_motor->SetOutput(slide_motor_output);
+
     force_target_speed = MAP_RANGE(dbus->ch3, -660, 660, -300, 300);  // map ch0 to target speed for force motor
 
     // Compute the omega delta for PID control

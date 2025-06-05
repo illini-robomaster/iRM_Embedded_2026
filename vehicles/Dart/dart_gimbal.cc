@@ -46,7 +46,7 @@
 
 #define LOADER_FEED_MOTOR_CONTACT_OUTPUT 1000
 #define LOADER_FEED_MOTOR_RELEASE_OUTPUT -1000
-#define LOADER_SLIDE_MOTOR_DOWN_OUTPUT 0
+#define LOADER_SLIDE_MOTOR_DOWN_OUTPUT 10
 #define LOADER_SLIDE_MOTOR_UP_OUTPUT 385
 
 #define ABS(x) ((x) > 0 ? (x) : -(x))
@@ -69,7 +69,6 @@ static remote::DBUS* dbus;
 static bsp::CAN* can1 = nullptr;  // for load motor
 
 // variables:
-static int trigger_motor_output = 1500;
 
 static int16_t load_motor_1_output = 0;
 static int16_t load_motor_2_output = 0;
@@ -117,10 +116,11 @@ void dartLoadTask(void* arg) {
     if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output
       trigger_motor->SetOutput(600);
       // print("trigger on\r\n");
-    } else if (dbus->swr == remote::MID) {  // when SWR is mid, stop the motor
+    } else {  // when SWR is mid, stop the motor
       trigger_motor->SetOutput(0);
-    } else if (dbus->swr == remote::DOWN) {  // when SWR is down, decrease motor output
-      osDelay(500);
+    }
+    if (dbus->swr == remote::DOWN) {  // when SWR is down, decrease motor output
+      osDelay(2000);
       if (curr_state == 0) {
         curr_state = 1;  // change to ready state
       } else if (curr_state == 1) {
@@ -160,46 +160,37 @@ void dartLoadTask(void* arg) {
     force_motor->SetOutput(0);
     load_motor_temperature = load_motor_1->GetTemp();
     load_motor_current = load_motor_1->GetCurr();
-    // print("Load Motor 1 Output: %d, Load Motor 2 Output: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
-    //       load_motor_1_output, load_motor_2_output, load_motor_temperature, load_motor_current);
-    // print("Force Motor Speed: %d, Load Motor 1 Speed: %d, Load Motor 2 Speed: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
-    //       force_target_speed, load_motor_1->GetOmega(), load_motor_2->GetOmega(), load_motor_temperature, load_motor_current);
-    print("loader_slide_motor output: %d\r\n", dbus->ch1);
-    print("loader_feed_motor output: %d\r\n", dbus->ch2);
     control::MotorCANBase::TransmitOutput(motors_can1_load, 3);  // Transmit the output to the load motor
 
-    reload_task(curr_state);  // Call the reload task with the current state
+    print("loader catridge motor angle: % .4f ", loader_catridge_motor->GetTheta());
+
+    switch (curr_state) {
+      case 0:  // release state
+        loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+        loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+        break;
+      case 1:  // ready state
+        loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+        loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+        break;
+      case 2:  // contact state
+        loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+        loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
+        break;
+      case 3:  // loading state
+        loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+        loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
+        break;
+      case 4:  // fire state
+        loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+        loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+        break;
+      default:
+        break;
+    }
     osDelay(10);
 
     // Load motor control
-  }
-}
-void reload_task(uint8_t state) {
-  // When called, this task will reload the dart, which is a fixed action
-  // slide motor will move from 0 to 385
-  switch (state) {
-    case 0:  // release state
-      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
-      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
-      break;
-    case 1:  // ready state
-      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
-      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
-      break;
-    case 2:  // contact state
-      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
-      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
-      break;
-    case 3:  // loading state
-      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
-      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
-      break;
-    case 4:  // fire state
-      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
-      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
-      break;
-    default:
-      break;
   }
 }
 

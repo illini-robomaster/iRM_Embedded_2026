@@ -104,6 +104,7 @@ void dartLoadTask(void* arg) {
   control::ConstrainedPID pid_right(param, MAX_IOUT, MAX_OUT);
   control::ConstrainedPID pid_force(param, MAX_IOUT, MAX_OUT);
   control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2, force_motor};  // load motor
+  control::MotorCANBase* motor_loader_catridge[] = {loader_catridge_motor};               // loader catridge motor
   float diff_load_1 = 0;
   float diff_load_2 = 0;
   float diff_force = 0;
@@ -113,11 +114,10 @@ void dartLoadTask(void* arg) {
 
   while (true) {
     // This is for the trigger motor
-    if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output
-      trigger_motor->SetOutput(600);
-      // print("trigger on\r\n");
-    } else {  // when SWR is mid, stop the motor
+    if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output, this will release the dart and launch it
       trigger_motor->SetOutput(0);
+    } else {  // when SWR is mid, stop the motor, this will make the trigger hold the dart in place
+      trigger_motor->SetOutput(600);
     }
     if (dbus->swr == remote::DOWN) {  // when SWR is down, decrease motor output
       osDelay(2000);
@@ -161,6 +161,7 @@ void dartLoadTask(void* arg) {
     load_motor_temperature = load_motor_1->GetTemp();
     load_motor_current = load_motor_1->GetCurr();
     control::MotorCANBase::TransmitOutput(motors_can1_load, 3);  // Transmit the output to the load motor
+    control::MotorCANBase::TransmitOutput(motor_loader_catridge, 1);  // Transmit the output to the loader catridge motor
 
     print("loader catridge motor angle: % .4f ", loader_catridge_motor->GetTheta());
 
@@ -204,7 +205,7 @@ void RM_RTOS_Init(){
     can1 = new bsp::CAN(&hcan1); // can1 for load motor, make sure to initialize can before motor
     load_motor_1 = new control::Motor3508(can1, 0x201);
     load_motor_2 = new control::Motor3508(can1, 0x202);
-    loader_catridge_motor = new control::Motor6020(can1, 0x203);  // loader catridge motor, can be used for other purposes
+    loader_catridge_motor = new control::Motor6020(can1, 0x207);  // loader catridge motor, can be used for other purposes
     force_motor = new control::Motor2006(can1, 0x204);            // force motor, can be used for other purposes
     dbus = new remote::DBUS(&huart3);
     loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);

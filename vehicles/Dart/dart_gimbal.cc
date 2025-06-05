@@ -29,6 +29,8 @@
 #include "utils.h"
 
 #define LEFT_MOTOR_PWM_CHANNEL 1
+#define LOADER_SLIDE_MOTOR_PWM_CHANNEL 2
+#define LOADER_FEED_MOTOR_PWM_CHANNEL 3
 #define TIM_CLOCK_FREQ 1000000
 #define MOTOR_OUT_FREQ 50
 
@@ -47,6 +49,10 @@
 bsp::GPIO* key = nullptr;
 
 control::MotorPWMBase* trigger_motor;
+
+control::MotorPWMBase* loader_slide_motor;
+control::MotorPWMBase* loader_feed_motor;
+
 control::MotorCANBase* load_motor_1;
 control::MotorCANBase* load_motor_2;
 control::MotorCANBase* force_motor;
@@ -112,7 +118,8 @@ void dartLoadTask(void* arg) {
     } else {
       load_target_speed = 0;  // stop the load motor when SWL is at mid
     }
-
+    loader_slide_motor->SetOutput(dbus->ch1);                         // Set the slide motor output based on ch1 input
+    loader_feed_motor->SetOutput(dbus->ch2);                         // Set the feed motor output based on ch2 input
     force_target_speed = MAP_RANGE(dbus->ch3, -660, 660, -300, 300);  // map ch0 to target speed for force motor
 
     // Compute the omega delta for PID control
@@ -131,22 +138,30 @@ void dartLoadTask(void* arg) {
     load_motor_current = load_motor_1->GetCurr();
     // print("Load Motor 1 Output: %d, Load Motor 2 Output: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
     //       load_motor_1_output, load_motor_2_output, load_motor_temperature, load_motor_current);
-    print("Force Motor Speed: %d, Load Motor 1 Speed: %d, Load Motor 2 Speed: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
-          force_target_speed, load_motor_1->GetOmega(), load_motor_2->GetOmega(), load_motor_temperature, load_motor_current);
+    // print("Force Motor Speed: %d, Load Motor 1 Speed: %d, Load Motor 2 Speed: %d, Load Motor Temperature: %d, Load Motor Current: %d\r\n",
+    //       force_target_speed, load_motor_1->GetOmega(), load_motor_2->GetOmega(), load_motor_temperature, load_motor_current);
+    print("loader_slide_motor output: %d\r\n", dbus->ch1);
+    print("loader_feed_motor output: %d\r\n", dbus->ch2);
     control::MotorCANBase::TransmitOutput(motors_can1_load, 3);  // Transmit the output to the load motor
 
     osDelay(10);
 
     // Load motor control
-//    diff = motors_can1_load->GetOmegaDelta(TARGET_SPEED);
-//    int16_t out = pid.ComputeConstrainedOutput();
   }
+}
+void reload_task(void* arg) {
+  UNUSED(arg);
+  // When called, this task will reload the dart, which is a fixed action
+
+  return;
 }
 
 void RM_RTOS_Init(){
     print_use_uart(&huart1);
     key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
     trigger_motor = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, trigger_motor_output);
+    loader_slide_motor = new control::MotorPWMBase(&htim1, LOADER_SLIDE_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
+    loader_feed_motor = new control::MotorPWMBase(&htim1, LOADER_FEED_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
     trigger_motor->SetOutput(0);
     can1 = new bsp::CAN(&hcan1); // can1 for load motor, make sure to initialize can before motor
     load_motor_1 = new control::Motor3508(can1, 0x201);

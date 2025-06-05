@@ -42,6 +42,8 @@
 #define MAX_IOUT 16384
 #define MAX_OUT 60000
 
+#define IDLE_THROTTLE 1500
+
 #define LOADER_FEED_MOTOR_CONTACT_OUTPUT 1000
 #define LOADER_FEED_MOTOR_RELEASE_OUTPUT -1000
 #define LOADER_SLIDE_MOTOR_DOWN_OUTPUT 0
@@ -57,6 +59,7 @@ control::MotorPWMBase* trigger_motor;
 
 control::MotorPWMBase* loader_slide_motor;
 control::MotorPWMBase* loader_feed_motor;
+control::MotorCANBase* loader_catridge_motor;
 
 control::MotorCANBase* load_motor_1;
 control::MotorCANBase* load_motor_2;
@@ -81,7 +84,7 @@ float Kd_load = 65;
 // thread attributes
 
 // helpers
-void reload_task();
+void reload_task(uint8_t state);
 
 osThreadId_t dartLoadTaskHandle;
 const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
@@ -107,9 +110,8 @@ void dartLoadTask(void* arg) {
   float diff_force = 0;
   float load_target_speed = 0;   // target speed for load motor, can be adjusted
   float force_target_speed = 0;  // target speed for force motor, can be adjusted
+  uint8_t curr_state = 0;        // current state of the dart loading mechanism
 
-  int slide_motor_output = 0;
-  int feed_motor_output = 0;
   while (true) {
     // This is for the trigger motor
     if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output
@@ -118,7 +120,18 @@ void dartLoadTask(void* arg) {
     } else if (dbus->swr == remote::MID) {  // when SWR is mid, stop the motor
       trigger_motor->SetOutput(0);
     } else if (dbus->swr == remote::DOWN) {  // when SWR is down, decrease motor output
-      reload_task();                         // reload the dart
+      osDelay(500);
+      if (curr_state == 0) {
+        curr_state = 1;  // change to ready state
+      } else if (curr_state == 1) {
+        curr_state = 2;  // change to contact state
+      } else if (curr_state == 2) {
+        curr_state = 3;  // change to loading state
+      } else if (curr_state == 3) {
+        curr_state = 4;  // change to fire state
+      } else if (curr_state == 4) {
+        curr_state = 0;  // change to release state
+      }
     }
 
     // Load motor control logic
@@ -155,35 +168,53 @@ void dartLoadTask(void* arg) {
     print("loader_feed_motor output: %d\r\n", dbus->ch2);
     control::MotorCANBase::TransmitOutput(motors_can1_load, 3);  // Transmit the output to the load motor
 
+    reload_task(curr_state);  // Call the reload task with the current state
     osDelay(10);
 
     // Load motor control
   }
 }
-void reload_task() {
+void reload_task(uint8_t state) {
   // When called, this task will reload the dart, which is a fixed action
   // slide motor will move from 0 to 385
-  loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
-  osDelay(500);
-  loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
-  osDelay(500);
-  loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
-  osDelay(500);
-  loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
-  return;
+  switch (state) {
+    case 0:  // release state
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+      break;
+    case 1:  // ready state
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+      break;
+    case 2:  // contact state
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
+      break;
+    case 3:  // loading state
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
+      break;
+    case 4:  // fire state
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+      break;
+    default:
+      break;
+  }
 }
 
 void RM_RTOS_Init(){
     print_use_uart(&huart1);
     key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
-    trigger_motor = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, trigger_motor_output);
-    loader_slide_motor = new control::MotorPWMBase(&htim1, LOADER_SLIDE_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
-    loader_feed_motor = new control::MotorPWMBase(&htim1, LOADER_FEED_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, 0);
+    trigger_motor = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, IDLE_THROTTLE);
+    loader_slide_motor = new control::MotorPWMBase(&htim1, LOADER_SLIDE_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, IDLE_THROTTLE);
+    loader_feed_motor = new control::MotorPWMBase(&htim1, LOADER_FEED_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, IDLE_THROTTLE);
     trigger_motor->SetOutput(0);
     can1 = new bsp::CAN(&hcan1); // can1 for load motor, make sure to initialize can before motor
     load_motor_1 = new control::Motor3508(can1, 0x201);
     load_motor_2 = new control::Motor3508(can1, 0x202);
-    force_motor = new control::Motor2006(can1, 0x203);  // force motor, can be used for other purposes
+    loader_catridge_motor = new control::Motor6020(can1, 0x203);  // loader catridge motor, can be used for other purposes
+    force_motor = new control::Motor2006(can1, 0x204);            // force motor, can be used for other purposes
     dbus = new remote::DBUS(&huart3);
     loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
 }

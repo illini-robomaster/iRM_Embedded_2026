@@ -44,6 +44,10 @@ irm_add_arm_executable(${PROJECT_NAME}_m6020
     TARGET DJI_Board_TypeC
     SOURCES m6020.cc)
 
+irm_add_arm_executable(${PROJECT_NAME}_m6020_position
+    TARGET DJI_Board_TypeC
+    SOURCES m6020_pos.cc)
+
 irm_add_arm_executable(${PROJECT_NAME}_m6623
     TARGET DJI_Board_TypeA
     SOURCES m6623.cc)

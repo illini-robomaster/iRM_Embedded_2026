@@ -17,13 +17,17 @@ building the source code and flashing the embedded chips.
 3. Decompress it to some directory and find an absolute path to the `bin` directory.
 
    In my case: `/Users/alvin/gcc-arm-none-eabi-10.3-2021.10/bin`.
-
-4. For Linux / Mac users, add the following line (replace `<path>`
-   with the actual binary path found in step 3) to `~/.bashrc` for bash users
-   or `~/.zshrc` for zsh users.
-
+4. For Linux / Mac users, add the toolchain to your path:
    ```sh
-   export PATH=<path>:$PATH
+   chmod -x /Users/alvin/gcc-arm-none-eabi-10.3-2021.10/bin/*
+   sudo cp /Users/alvin/gcc-arm-none-eabi-10.3-2021.10/bin/* /usr/local/bin
+   rm -rf /Users/alvin/gcc-arm-none-eabi-10.3-2021.10  # Optional
+   ```
+5. If you do not have root access: For Linux / Mac users, add the following line
+   (replace `<path>` with the actual binary path found in step 3) to `~/.bashrc` for bash users
+   or `~/.zshrc` for zsh users.
+   ```sh
+   echo 'export PATH=<path>:$PATH' > .bashrc  # or .zshrc etc.
    ```
 
 ### Compile Project

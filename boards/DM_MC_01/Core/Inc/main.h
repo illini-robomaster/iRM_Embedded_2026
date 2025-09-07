@@ -7,13 +7,12 @@
   ******************************************************************************
   * @attention
   *
-  * <h2><center>&copy; Copyright (c) 2023 STMicroelectronics.
-  * All rights reserved.</center></h2>
+  * Copyright (c) 2024 STMicroelectronics.
+  * All rights reserved.
   *
-  * This software component is licensed by ST under Ultimate Liberty license
-  * SLA0044, the "License"; You may not use this file except in compliance with
-  * the License. You may obtain a copy of the License at:
-  *                             www.st.com/SLA0044
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
   *
   ******************************************************************************
   */
@@ -105,6 +104,10 @@ void RM_RTOS_Default_Task(const void *argument);
 #define LCD_RES_GPIO_Port GPIOB
 #define IMU_TEMP_Pin GPIO_PIN_5
 #define IMU_TEMP_GPIO_Port GPIOB
+#define IN1_GPIO_Port GPIOC
+#define IN1_Pin GPIO_PIN_6
+#define OUT_5V_Port GPIOC
+#define OUT_5V_Pin GPIO_PIN_14
 
 /* USER CODE BEGIN Private defines */
 #define DM_MC01_GENERAL

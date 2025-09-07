@@ -151,10 +151,11 @@ typedef struct {
  */
 class UnitreeMotor {
 public:
+  UnitreeMotor();
   /**
    * @brief zip the send data package
    */
-  void ModifyData();
+  void ModifyData(const unsigned short motor_id);
 
   /**
    * @brief unzip the recv data package
@@ -191,12 +192,15 @@ public:
    */
   void Control(const unsigned short motor_id, const float torque, const float speed, const float position, const float Kp, const float Kd);
 
-  motor_send_t send; // send storage structure instance
-  motor_recv_t recv; // recv storage structure instance
+  volatile bool connection_flag_[3] = {false};
+
+  motor_send_t send[3]; // send storage structure instance
+  motor_recv_t recv[3]; // recv storage structure instance
 
   const int send_length = 34; // send data package length
   const int recv_length = 78; // recv data package length
-  
+  const float gear_ratio = 9.07; // A1 Gear Ratio
+
 private:
   /**
    * @brief CRC32 verification function
@@ -207,7 +211,8 @@ private:
    */
   uint32_t crc32_core(uint32_t* ptr, uint32_t len);
 
-  const float gear_ratio = 9.1; // A1 Gear Ratio
 };
+
+
 
 }

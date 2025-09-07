@@ -41,6 +41,7 @@ void RM_RTOS_Init(void) {
   gpio_green = new bsp::GPIO(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
   gpio_red->High();
   gpio_green->High();
+
 }
 
 void RM_RTOS_Default_Task(const void* argument) {

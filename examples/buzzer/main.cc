@@ -70,10 +70,106 @@ static bsp::BuzzerNoteDelayed War_Cant_of_Mars[] = {
     {Note::Finish, 0},
 };
 
+static bsp::BuzzerNoteDelayed Imperial_March[] = {
+        {Note::NOTE_AS4, 250},
+        {Note::NOTE_AS4, 250},
+        {Note::NOTE_AS4, 250},//1
+        {Note::NOTE_F5, 1000},
+        {Note::NOTE_C6, 1000},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_F6, 1000},
+        {Note::NOTE_C6, 500},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_F6, 1000},
+        {Note::NOTE_C6, 500},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_G5, 1000},
+        {Note::NOTE_C5, 250},
+        {Note::NOTE_C5, 250},
+        {Note::NOTE_C5, 250},
+        {Note::NOTE_F5, 1000},
+        {Note::NOTE_C6, 1000},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_F6, 1000},
+        {Note::NOTE_C6, 500},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_F6, 1000},
+        {Note::NOTE_C6, 500},//8
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_G5, 1000},
+        {Note::NOTE_C5, 450},
+        {Note::NOTE_C5, 16},
+        {Note::NOTE_D5, 900},
+        {Note::NOTE_D5, 250},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_F5, 250},
+        {Note::NOTE_F5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 500},
+        {Note::NOTE_D5, 250},
+        {Note::NOTE_E5, 500},
+        {Note::NOTE_C5, 450},
+        {Note::NOTE_C5, 16},
+        {Note::NOTE_D5, 900},
+        {Note::NOTE_D5, 250},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_F5, 250},
+        {Note::NOTE_C6, 450},
+        {Note::NOTE_G5, 16},
+        {Note::NOTE_G5, 2},
+        {Note::Silent, 250},
+        {Note::NOTE_C5, 250},//13
+        {Note::NOTE_D5, 900},
+        {Note::NOTE_D5, 250},
+        {Note::NOTE_AS5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_F5, 250},
+        {Note::NOTE_F5, 250},
+        {Note::NOTE_G5, 250},
+        {Note::NOTE_A5, 250},
+        {Note::NOTE_G5, 500},
+        {Note::NOTE_D5, 250},
+        {Note::NOTE_E5, 500},
+        {Note::NOTE_C6, 450},
+        {Note::NOTE_C6, 16},
+        {Note::NOTE_F6, 500},
+        {Note::NOTE_DS6, 250},
+        {Note::NOTE_CS6, 500},
+        {Note::NOTE_C6, 250},
+        {Note::NOTE_AS5, 500},
+        {Note::NOTE_GS5, 250},
+        {Note::NOTE_G5, 500},
+        {Note::NOTE_F5, 250},
+        {Note::NOTE_C6, 2000},
+        {Note::Silent, 0},
+        {Note::Finish, 0},
+};
+
 void RM_RTOS_Init(void) {
   bsp::Buzzer buzzer(&htim4, 3, 1000000);
-  buzzer.SingSong(Mario);
-  buzzer.SingSong(War_Cant_of_Mars);
+  UNUSED(Mario);
+  UNUSED(War_Cant_of_Mars);
+//  buzzer.SingSong(Mario);
+//  buzzer.SingSong(War_Cant_of_Mars);
+  buzzer.SingSong(Imperial_March);
 }
 
 

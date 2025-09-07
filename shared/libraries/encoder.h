@@ -35,16 +35,26 @@ namespace control {
 class BRTEncoder {
  public:
   /* constructor wrapper over MotorCANBase */
-  BRTEncoder(bsp::CAN* can, uint16_t rx_id);
+  BRTEncoder(bsp::CAN* can, uint16_t rx_id, bool invert);
   /* implements data update callback */
   void UpdateData(const uint8_t data[]);
   /* implements data printout */
+  float getData() const {
+    return invert_ ? -angle_ : angle_;
+  }
+  void setInvert(bool inv){
+    invert_ = inv;
+  }
   void PrintData() const;
+  bool is_connected(){
+    return connection_flag_;
+  }
 
  private:
   bsp::CAN* can_;
-  uint16_t rx_id_;
   float angle_;
+  uint16_t rx_id_;
+  bool invert_;
   bool connection_flag_ = false;
 };
 

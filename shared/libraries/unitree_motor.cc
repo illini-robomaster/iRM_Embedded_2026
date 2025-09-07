@@ -23,84 +23,92 @@
 
 namespace control {
 
-void UnitreeMotor::ModifyData() {
-    send.data.head.start[0] = 0xFE;
-    send.data.head.start[1] = 0xEE;
-    send.data.head.motorID = send.id;
-    send.data.head.reserved = 0x0;
-    send.data.Mdata.mode = send.mode;
-    send.data.Mdata.ModifyBit = 0xFF;
-    send.data.Mdata.ReadBit = 0x0;
-    send.data.Mdata.reserved = 0x0;
-    send.data.Mdata.Modify.L = 0;
-    send.data.Mdata.T = send.T * 256;
-    send.data.Mdata.W = send.W * 128;
-    send.data.Mdata.Pos = (int)((send.Pos / 6.2832) * 16384.0);
-    send.data.Mdata.K_P = send.K_P * 2048;
-    send.data.Mdata.K_W = send.K_W * 1024;
-    send.data.Mdata.LowHzMotorCmdIndex = 0;
-    send.data.Mdata.LowHzMotorCmdByte = 0;
-    send.data.Mdata.Res[0] = send.Res;
-    send.data.CRCdata.u32 = crc32_core((uint32_t*)(&(send.data)), 7);
+UnitreeMotor::UnitreeMotor() {
+  memset(send, 0, sizeof(send[0]) * 3);
+  memset(recv, 0, sizeof(recv[0]) * 3);
+}
+
+void UnitreeMotor::ModifyData(const unsigned short motor_id) {
+    send[motor_id].data.head.start[0] = 0xFE;
+    send[motor_id].data.head.start[1] = 0xEE;
+    send[motor_id].data.head.motorID = send[motor_id].id;
+    send[motor_id].data.head.reserved = 0x0;
+    send[motor_id].data.Mdata.mode = send[motor_id].mode;
+    send[motor_id].data.Mdata.ModifyBit = 0xFF;
+    send[motor_id].data.Mdata.ReadBit = 0x0;
+    send[motor_id].data.Mdata.reserved = 0x0;
+    send[motor_id].data.Mdata.Modify.L = 0;
+    send[motor_id].data.Mdata.T = send[motor_id].T * 256;
+    send[motor_id].data.Mdata.W = send[motor_id].W * 128;
+    send[motor_id].data.Mdata.Pos = (int)((send[motor_id].Pos / 6.2832) * 16384.0);
+    send[motor_id].data.Mdata.K_P = send[motor_id].K_P * 2048;
+    send[motor_id].data.Mdata.K_W = send[motor_id].K_W * 1024;
+    send[motor_id].data.Mdata.LowHzMotorCmdIndex = 0;
+    send[motor_id].data.Mdata.LowHzMotorCmdByte = 0;
+    send[motor_id].data.Mdata.Res[0] = send[motor_id].Res;
+    send[motor_id].data.CRCdata.u32 = crc32_core((uint32_t*)(&(send[motor_id].data)), 7);
 }
 
 bool UnitreeMotor::ExtractData(const communication::package_t package) {
-    memcpy(&(recv.data), package.data, package.length);
-    if (recv.data.CRCdata.u32 != crc32_core((uint32_t*)(&(recv.data)), 18)) {
-        recv.correct = false;
-        return recv.correct;
+    motor_recv_t tmp;
+    memcpy(&(tmp.data), package.data, package.length);
+    if (tmp.data.CRCdata.u32 != crc32_core((uint32_t*)(&(tmp.data)), 18)) {
+        tmp.correct = false;
+        return tmp.correct;
     } else {
-        recv.id = recv.data.head.motorID;
-        recv.mode = recv.data.Mdata.mode;
-        recv.Temp = recv.data.Mdata.Temp;
-        recv.MError = recv.data.Mdata.MError;
-        recv.T = ((float)recv.data.Mdata.T) / 256;
-        recv.W = ((float)recv.data.Mdata.W) / 128;
-        recv.LW = recv.data.Mdata.LW;
-        recv.Acc = (int)recv.data.Mdata.Acc;
-        recv.Pos = 6.2832 * ((float)recv.data.Mdata.Pos) / 16384;
-        recv.gyro[0] = ((float)recv.data.Mdata.gyro[0]) * 0.00107993176;
-        recv.gyro[1] = ((float)recv.data.Mdata.gyro[1]) * 0.00107993176;
-        recv.gyro[2] = ((float)recv.data.Mdata.gyro[2]) * 0.00107993176;
-        recv.acc[0] = ((float)recv.data.Mdata.acc[0]) * 0.0023911132;
-        recv.acc[1] = ((float)recv.data.Mdata.acc[1]) * 0.0023911132;
-        recv.acc[2] = ((float)recv.data.Mdata.acc[2]) * 0.0023911132;
-        recv.correct = true;
-        return recv.correct;
+        tmp.id = tmp.data.head.motorID;
+        tmp.mode = tmp.data.Mdata.mode;
+        tmp.Temp = tmp.data.Mdata.Temp;
+        tmp.MError = tmp.data.Mdata.MError;
+        tmp.T = ((float)tmp.data.Mdata.T) / 256;
+        tmp.W = ((float)tmp.data.Mdata.W) / 128 / gear_ratio;
+        tmp.LW = tmp.data.Mdata.LW;
+        tmp.Acc = (int)tmp.data.Mdata.Acc;
+        tmp.Pos = 6.2832 * ((float)tmp.data.Mdata.Pos) / 16384 / gear_ratio;
+        tmp.gyro[0] = ((float)tmp.data.Mdata.gyro[0]) * 0.00107993176;
+        tmp.gyro[1] = ((float)tmp.data.Mdata.gyro[1]) * 0.00107993176;
+        tmp.gyro[2] = ((float)tmp.data.Mdata.gyro[2]) * 0.00107993176;
+        tmp.acc[0] = ((float)tmp.data.Mdata.acc[0]) * 0.0023911132;
+        tmp.acc[1] = ((float)tmp.data.Mdata.acc[1]) * 0.0023911132;
+        tmp.acc[2] = ((float)tmp.data.Mdata.acc[2]) * 0.0023911132;
+        tmp.correct = true;
+        memcpy(&recv[tmp.id], &tmp, sizeof(motor_recv_t));
+        connection_flag_[tmp.id] = true;
+        return tmp.correct;
     }
 }
 
 void UnitreeMotor::Stop(const unsigned short motor_id) {
-    send.id = motor_id;
-    send.mode = 0;
-    send.T = 0.0;
-    send.W = 0.0;
-    send.Pos = 0.0;
-    send.K_P = 0.0;
-    send.K_W = 0.0;
-    ModifyData();
+    send[motor_id].id = motor_id;
+    send[motor_id].mode = 0;
+    send[motor_id].T = 0.0;
+    send[motor_id].W = 0.0;
+    send[motor_id].Pos = 0.0;
+    send[motor_id].K_P = 0.0;
+    send[motor_id].K_W = 0.0;
+    ModifyData(motor_id);
 }
 
 void UnitreeMotor::Test(const unsigned short motor_id) {
-    send.id = motor_id;
-    send.mode = 5;
-    send.T = 0.0;
-    send.W = 0.0;
-    send.Pos = 0.0;
-    send.K_P = 0.0;
-    send.K_W = 0.0;
-    ModifyData();
+    send[motor_id].id = motor_id;
+    send[motor_id].mode = 5;
+    send[motor_id].T = 0.0;
+    send[motor_id].W = 0.0;
+    send[motor_id].Pos = 0.0;
+    send[motor_id].K_P = 0.0;
+    send[motor_id].K_W = 0.0;
+    ModifyData(motor_id);
 }
 
 void UnitreeMotor::Control(const unsigned short motor_id, const float torque, const float speed, const float position, const float Kp, const float Kd) {
-    send.id = motor_id;
-    send.mode = 10;
-    send.T = torque;
-    send.W = speed * gear_ratio;
-    send.Pos = position * gear_ratio;
-    send.K_P = Kp;
-    send.K_W = Kd;
-    ModifyData();
+    send[motor_id].id = motor_id;
+    send[motor_id].mode = 10;
+    send[motor_id].T = torque;
+    send[motor_id].W = speed * gear_ratio;
+    send[motor_id].Pos = position * gear_ratio;
+    send[motor_id].K_P = Kp;
+    send[motor_id].K_W = Kd;
+    ModifyData(motor_id);
 }
 
 uint32_t UnitreeMotor::crc32_core(uint32_t* ptr, uint32_t len) {

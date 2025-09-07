@@ -21,7 +21,7 @@
 project(example_can_bridge ASM C CXX)
 
 irm_add_arm_executable(${PROJECT_NAME}_send
-    TARGET DJI_Board_TypeC
+    TARGET DM_MC_01
     SOURCES send.cc)
 
 irm_add_arm_executable(${PROJECT_NAME}_receive

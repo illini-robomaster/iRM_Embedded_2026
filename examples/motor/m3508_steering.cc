@@ -109,7 +109,7 @@ void RM_RTOS_Default_Task(const void* args) {
   steering1->SetMaxSpeed(ALIGN_SPEED);
   steering3->SetMaxSpeed(ALIGN_SPEED);
 
-  // Don't put Calibrate() in the while case
+  // Don't put Calibrate() in the while condition
   bool alignment_complete1 = false;
   bool alignment_complete3 = false;
   while (!alignment_complete1 || !alignment_complete3) {

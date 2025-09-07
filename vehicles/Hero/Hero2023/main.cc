@@ -218,7 +218,7 @@ void chassisTask(void* arg) {
 // Gimbal
 //==================================================================================================
 
-const osThreadAttr_t gimbalTaskAttribute = {.name = "gimbalTask",
+const osThreadAttr_t gimbalTaskAttribute = {.name = "gimbal_task",
                                             .attr_bits = osThreadDetached,
                                             .cb_mem = nullptr,
                                             .cb_size = 0,
@@ -235,7 +235,7 @@ osThreadId_t gimbalTaskHandle;
 static control::Motor4310* pitch_motor = nullptr;
 //static bsp::Laser* laser = nullptr;
 
-void gimbalTask(void* arg) {
+void gimbal_task(void* arg) {
   UNUSED(arg);
   // motor pointer initialization
   control::Motor4310* motors_can2_gimbal[] = {pitch_motor};
@@ -336,7 +336,7 @@ void gimbalTask(void* arg) {
 //==================================================================================================
 // Shooter(TODO)
 //==================================================================================================
-const osThreadAttr_t shooterTaskAttribute = {.name = "shooterTask",
+const osThreadAttr_t shooterTaskAttribute = {.name = "shooter_task",
                                              .attr_bits = osThreadDetached,
                                              .cb_mem = nullptr,
                                              .cb_size = 0,
@@ -365,7 +365,7 @@ static BoolEdgeDetector ForceStrongDetect(false);
 
 static float force_angle = 65 * PI;
 
-void shooterTask(void* arg) {
+void shooter_task(void* arg) {
   UNUSED(arg);
   // motors initialization
   control::MotorCANBase* can2_reloader[] = { reload_motor};
@@ -742,8 +742,8 @@ void RM_RTOS_Init() {
 void RM_RTOS_Threads_Init(void) {
   refereeTaskHandle = osThreadNew(refereeTask, nullptr, &refereeTaskAttribute);
   chassisTaskHandle = osThreadNew(chassisTask, nullptr, &chassisTaskAttribute);
-  gimbalTaskHandle = osThreadNew(gimbalTask, nullptr, &gimbalTaskAttribute);
-  shooterTaskHandle = osThreadNew(shooterTask, nullptr, &shooterTaskAttribute);
+  gimbalTaskHandle = osThreadNew(gimbal_task, nullptr, &gimbalTaskAttribute);
+  shooterTaskHandle = osThreadNew(shooter_task, nullptr, &shooterTaskAttribute);
 //  selfTestTaskHandle = osThreadNew(self_Check_Task, nullptr, &selfTestingTask);
 }
 

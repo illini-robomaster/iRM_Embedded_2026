@@ -44,7 +44,6 @@ osThreadId_t A1TaskHandle;
 class CustomUART: public bsp::UART {
  public:
   using bsp::UART::UART;
-
  protected:
   /* notify application when rx data is pending read */
   void RxCompleteCallback() override final { osThreadFlagsSet(A1TaskHandle, RX_SIGNAL); }
@@ -87,42 +86,42 @@ void RM_RTOS_Default_Task(const void* arguments) {
   UNUSED(arguments);
 
   A1->Test(0);
-  A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
+  A1_uart->Write((uint8_t*)(&(A1->send[0].data)), A1->send_length);
   osDelay(3000);
 
   A1->Stop(0);
-  A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
+  A1_uart->Write((uint8_t*)(&(A1->send[0].data)), A1->send_length);
   osDelay(3000);
 
   A1->Control(0, 0.0, -1.0, 0.0, 0.0, 3.0); // constant speed mode
   for (int i = 0; i < 30; ++i) {
-    A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
+    A1_uart->Write((uint8_t*)(&(A1->send[0].data)), A1->send_length);
     set_cursor(0, 0);
     clear_screen();
-    print("Motor ID: %d\r\n", A1->recv.id);
-    print("Mode    : %d\r\n", A1->recv.mode);
-    print("Temp    : %d\r\n", A1->recv.Temp);
-    print("MError  : %d\r\n", A1->recv.MError);
-    print("Torque  : %.3f\r\n", A1->recv.T);
-    print("Speed   : %.3f\r\n", A1->recv.W);
-    print("Accel   : %d\r\n", A1->recv.Acc);
-    print("Position: %.3f\r\n", A1->recv.Pos);
+    print("Motor ID: %d\r\n", A1->recv[0].id);
+    print("Mode    : %d\r\n", A1->recv[0].mode);
+    print("Temp    : %d\r\n", A1->recv[0].Temp);
+    print("MError  : %d\r\n", A1->recv[0].MError);
+    print("Torque  : %.3f\r\n", A1->recv[0].T);
+    print("Speed   : %.3f\r\n", A1->recv[0].W);
+    print("Accel   : %d\r\n", A1->recv[0].Acc);
+    print("Position: %.3f\r\n", A1->recv[0].Pos);
     osDelay(100);
   }
 
   A1->Control(0, 0.0, 0.0, 0.0, 0.0, 0.0); // zero torque mode
   while (true) {
-    A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
+    A1_uart->Write((uint8_t*)(&(A1->send[0].data)), A1->send_length);
     set_cursor(0, 0);
     clear_screen();
-    print("Motor ID: %d\r\n", A1->recv.id);
-    print("Mode    : %d\r\n", A1->recv.mode);
-    print("Temp    : %d\r\n", A1->recv.Temp);
-    print("MError  : %d\r\n", A1->recv.MError);
-    print("Torque  : %.3f\r\n", A1->recv.T);
-    print("Speed   : %.3f\r\n", A1->recv.W);
-    print("Accel   : %d\r\n", A1->recv.Acc);
-    print("Position: %.3f\r\n", A1->recv.Pos);
+    print("Motor ID: %d\r\n", A1->recv[0].id);
+    print("Mode    : %d\r\n", A1->recv[0].mode);
+    print("Temp    : %d\r\n", A1->recv[0].Temp);
+    print("MError  : %d\r\n", A1->recv[0].MError);
+    print("Torque  : %.3f\r\n", A1->recv[0].T);
+    print("Speed   : %.3f\r\n", A1->recv[0].W);
+    print("Accel   : %d\r\n", A1->recv[0].Acc);
+    print("Position: %.3f\r\n", A1->recv[0].Pos);
     osDelay(100);
   }
 }

@@ -1,3 +1,5 @@
 CompileFlags:
+  CompilationDatabase: build
+  QueryDriver: [/Users/ziyi_wang/dependencies/gcc-arm-none-eabi/bin/arm-none-eabi-*]
   Add: [-ferror-limit=0, -D__weak=__attribute__((weak)), -D__packed=__attribute__((__packed__))]
   Remove: [-m*, -f*]

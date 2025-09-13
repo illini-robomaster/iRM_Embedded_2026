@@ -36,35 +36,50 @@ bsp::GPIO* key = nullptr;
 control::MotorCANBase* load_motor = NULL;
 remote::DBUS* dbus = nullptr;
 
+// Cascade PID controllers
+control::ConstrainedPID* position_pid = nullptr;  // Position (outer loop)
+control::ConstrainedPID* velocity_pid = nullptr;  // Velocity (inner loop)
 
-
+int16_t command = 0;
 
 void RM_RTOS_Init() {
   print_use_uart(&huart1);
   can1 = new bsp::CAN(&hcan1, true);
   load_motor = new control::Motor6020(can1, 0x207);
   dbus = new remote::DBUS(&huart3);
+
+  // Initialize cascade PID controllers
+  // Position PID (outer loop) - tuned for position control
+  float position_pid_params[3] = {30.0, 0.0, 0.3};                          // Kp, Ki, Kd for position
+  position_pid = new control::ConstrainedPID(position_pid_params, 0, 2.5);  // Low max_out for velocity reference
+
+  // Velocity PID (inner loop) - tuned for velocity control
+  float velocity_pid_params[3] = {3600.0, 20.0, 0.0};                             // Kp, Ki, Kd for velocity
+  velocity_pid = new control::ConstrainedPID(velocity_pid_params, 10000, 30000);  // Higher limits for motor output
 }
 
 void RM_RTOS_Default_Task(const void* args) {
   UNUSED(args);
   print("ok!\r\n");
-  
+
   osDelay(500);  // DBUS initialization needs time
-  
-  float pid_params[3] = {55000.0, 10.0, 100.0};
-  control::ConstrainedPID pid_(pid_params, 30000, 30000);
 
   float target_angle = 0.0;
   control::MotorCANBase* motors[] = {load_motor};
-  int16_t command;
-  
+
   // Edge detector for dbus channel 1 > 300
   BoolEdgeDetector ch1_edge_detector(false);
 
   while (true) {
-    command = pid_.ComputeOutput(load_motor->GetThetaDelta(target_angle));
-    
+    // Cascade PID Control Implementation
+    // Step 1: Position PID (outer loop) - calculates desired velocity
+    float position_error = load_motor->GetThetaDelta(target_angle);
+    float target_velocity = position_pid->ComputeOutput(position_error);
+
+    // Step 2: Velocity PID (inner loop) - calculates motor command
+    float velocity_error = load_motor->GetOmegaDelta(target_velocity);
+    command = velocity_pid->ComputeConstrainedOutput(velocity_error);
+
     // Update edge detector with ch1 > 300 condition
     ch1_edge_detector.input(dbus->ch1 > 300);
     
@@ -77,10 +92,10 @@ void RM_RTOS_Default_Task(const void* args) {
       print("Edge detected! New target angle: %.2f\r\n", target_angle);
     }
 
-    // print("command: %d \r\n", command);
-    print("target angle: %.2f, actual angle: %.2f, command: %d, ch1: %d\r\n", 
-          target_angle, load_motor->GetTheta(), command, dbus->ch1);
-    
+    // Enhanced debug output for cascade control
+    print("target_angle: %.2f, actual_angle: %.2f, target_vel: %.2f, actual_vel: %.2f, command: %d, ch1: %d\r\n",
+          target_angle, load_motor->GetTheta(), target_velocity, load_motor->GetOmega(), command, dbus->ch1);
+
     load_motor->SetOutput(command);
     control::MotorCANBase::TransmitOutput(motors, 1);
     osDelay(2);

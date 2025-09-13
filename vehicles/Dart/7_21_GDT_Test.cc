@@ -1,6 +1,6 @@
 /****************************************************************************
  *                                                                          *
- *  Copyright (C) 2023 RoboMaster.                                          *
+ *  Copyright (C) 2025 RoboMaster.                                          *
  *  Illini RoboMaster @ University of Illinois at Urbana-Champaign          *
  *                                                                          *
  *  This program is free software: you can redistribute it and/or modify    *
@@ -21,45 +21,69 @@
 #include "bsp_gpio.h"
 #include "bsp_print.h"
 #include "cmsis_os.h"
+#include "controller.h"
+#include "dbus.h"
 #include "main.h"
+#include "math.h"
 #include "motor.h"
+#include "utils.h"
 
 #define KEY_GPIO_GROUP GPIOA
 #define KEY_GPIO_PIN GPIO_PIN_0
 
 bsp::CAN* can1 = NULL;
 bsp::GPIO* key = nullptr;
-control::MotorCANBase* trigger_motor = NULL;
-control::MotorCANBase* motor2 = NULL;
+control::MotorCANBase* load_motor = NULL;
+remote::DBUS* dbus = nullptr;
+
+
+
 
 void RM_RTOS_Init() {
   print_use_uart(&huart1);
-
   can1 = new bsp::CAN(&hcan1, true);
-  trigger_motor = new control::Motor6020(can1, 0x205);
-  motor2 = new control::Motor6020(can1, 0x207);
-  key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
+  load_motor = new control::Motor6020(can1, 0x207);
+  dbus = new remote::DBUS(&huart3);
 }
 
 void RM_RTOS_Default_Task(const void* args) {
   UNUSED(args);
-  control::MotorCANBase* motors[] = {trigger_motor, motor2};
-
-  while(!key->Read());
-
-  while(key->Read());
-
   print("ok!\r\n");
+  
+  osDelay(500);  // DBUS initialization needs time
+  
+  float pid_params[3] = {55000.0, 10.0, 100.0};
+  control::ConstrainedPID pid_(pid_params, 30000, 30000);
+
+  float target_angle = 0.0;
+  control::MotorCANBase* motors[] = {load_motor};
+  int16_t command;
+  
+  // Edge detector for dbus channel 1 > 300
+  BoolEdgeDetector ch1_edge_detector(false);
 
   while (true) {
-    if (key->Read()) {
-      motor2->SetOutput(60);
-      trigger_motor->SetOutput(0);
-    } else {
-      trigger_motor->SetOutput(0);
-      print("%10.4f ", trigger_motor->GetTheta());
+    command = pid_.ComputeOutput(load_motor->GetThetaDelta(target_angle));
+    
+    // Update edge detector with ch1 > 300 condition
+    ch1_edge_detector.input(dbus->ch1 > 300);
+    
+    // Check for positive edge (transition from false to true)
+    if (ch1_edge_detector.posEdge()) {
+      target_angle += PI/3;
+      if (target_angle >= 2 * PI) {
+        target_angle = 0.0;
+      }
+      print("Edge detected! New target angle: %.2f\r\n", target_angle);
     }
-    control::MotorCANBase::TransmitOutput(motors, 2);
+
+    // print("command: %d \r\n", command);
+    print("target angle: %.2f, actual angle: %.2f, command: %d, ch1: %d\r\n", 
+          target_angle, load_motor->GetTheta(), command, dbus->ch1);
+    
+    load_motor->SetOutput(command);
+    control::MotorCANBase::TransmitOutput(motors, 1);
     osDelay(2);
   }
 }
+

@@ -39,7 +39,7 @@
 #define LOADER_FEED_MOTOR_RELEASE_OUTPUT -1000
 
 #define LOADER_SLIDE_MOTOR_DOWN_OUTPUT -20
-#define LOADER_SLIDE_MOTOR_UP_OUTPUT 514
+#define LOADER_SLIDE_MOTOR_UP_OUTPUT 530
 
 #define LOADER_SLIDE_MOTOR_PWM_CHANNEL 2
 #define LOADER_FEED_MOTOR_PWM_CHANNEL 3
@@ -64,6 +64,21 @@ typedef enum {
 } loader_state_t;
 
 loader_state_t current_loader_state = LOADER_STATE_RELEASE_UP;
+
+// State machine for ch2_right_trigger sequence
+typedef enum {
+  SEQUENCE_IDLE = 0,
+  SEQUENCE_MOTOR_POSITION,          // First spin PI/3 - position motor for loading
+  SEQUENCE_LOADER_PREPARE,          // Release + Up - prepare loader mechanism
+  SEQUENCE_LOADER_GRAB,             // Contact + Up - grab dart with feed motor
+  SEQUENCE_LOADER_LOAD,             // Contact + Down - load dart into position
+  SEQUENCE_LOADER_EJECT,            // Release + Up - eject mechanism back up
+  SEQUENCE_LOADER_RESET,            // Release + Down - reset to starting position
+  SEQUENCE_MOTOR_ADVANCE_AND_RESET  // Second spin PI/3 - advance to next position
+} sequence_state_t;
+
+sequence_state_t current_sequence_state = SEQUENCE_IDLE;
+uint32_t sequence_start_time = 0;
 
 int16_t command = 0;
 
@@ -98,8 +113,8 @@ void RM_RTOS_Default_Task(const void* args) {
   control::MotorCANBase* motors[] = {load_motor};
 
   // Edge detectors for dbus channels
-  BoolEdgeDetector ch1_edge_detector(false);  // For PWM state control
-  BoolEdgeDetector ch3_edge_detector(false);  // For target angle control
+  BoolEdgeDetector ch2_left_trigger(false);   // For PWM state control
+  BoolEdgeDetector ch2_right_trigger(false);  // For target angle control
 
   while (true) {
     // Cascade PID Control Implementation
@@ -112,30 +127,105 @@ void RM_RTOS_Default_Task(const void* args) {
     command = velocity_pid->ComputeConstrainedOutput(velocity_error);
 
     // Update edge detectors
-    ch1_edge_detector.input(dbus->ch1 > 300);
-    ch3_edge_detector.input(dbus->ch3 > 300);
+    ch2_left_trigger.input(dbus->ch2 < -300);
+    ch2_right_trigger.input(dbus->ch2 > 300);
 
-    // Check for ch3 positive edge to increment target angle
-    if (ch3_edge_detector.posEdge()) {
+    if (ch2_left_trigger.posEdge()) {
+      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+      osDelay(1000);
+      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
+      osDelay(1000);
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+      osDelay(1000);
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+      osDelay(1000);
+      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+      osDelay(1000);
+      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+    }
+
+    // Start ch2_right_trigger sequence
+    if (ch2_right_trigger.posEdge() && current_sequence_state == SEQUENCE_IDLE) {
+      print("CH2 Right Trigger: Starting dart loading sequence...\r\n");
+      current_sequence_state = SEQUENCE_MOTOR_POSITION;
+      sequence_start_time = osKernelGetTickCount();
+
+      // Step 1: Position motor for loading
       target_angle += PI / 3;
       if (target_angle >= 2 * PI) {
         target_angle = 0.0;
       }
-      print("CH3 Edge detected! New target angle: %.2f\r\n", target_angle);
+      print("Motor Positioning: Spinning to loading angle: %.2f\r\n", target_angle);
     }
 
-    // Control slide motor based on swr switch position
-    if (dbus->swr == remote::UP) {
-      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);  // Slide motor up when swr is UP
-    } else {
-      loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);  // Slide motor down when swr is not UP
-    }
+    // State machine for ch2_right_trigger sequence
+    uint32_t current_time = osKernelGetTickCount();
+    switch (current_sequence_state) {
+      case SEQUENCE_MOTOR_POSITION:
+        if (current_time - sequence_start_time >= 2000) {  // Wait 2s for motor positioning
+          current_sequence_state = SEQUENCE_LOADER_PREPARE;
+          sequence_start_time = current_time;
+          loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+          loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+          print("Loader Prepare: Release + Up - preparing loader mechanism\r\n");
+        }
+        break;
+      case SEQUENCE_LOADER_PREPARE:
+        if (current_time - sequence_start_time >= 1000) {
+          current_sequence_state = SEQUENCE_LOADER_GRAB;
+          sequence_start_time = current_time;
+          loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
+          print("Loader Grab: Contact + Up - grabbing dart\r\n");
+        }
+        break;
+      case SEQUENCE_LOADER_GRAB:
+        if (current_time - sequence_start_time >= 1000) {
+          current_sequence_state = SEQUENCE_LOADER_LOAD;
+          sequence_start_time = current_time;
+          loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+          print("Loader Load: Contact + Down - loading dart into position\r\n");
+        }
+        break;
+      case SEQUENCE_LOADER_LOAD:
+        if (current_time - sequence_start_time >= 1000) {
+          current_sequence_state = SEQUENCE_LOADER_EJECT;
+          sequence_start_time = current_time;
+          loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
+          print("Loader Eject: Release + Up - ejecting mechanism back up\r\n");
+        }
+        break;
+      case SEQUENCE_LOADER_EJECT:
+        if (current_time - sequence_start_time >= 1000) {
+          current_sequence_state = SEQUENCE_LOADER_RESET;
+          sequence_start_time = current_time;
+          loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
+          print("Loader Reset: Release + Down - resetting to starting position\r\n");
+        }
+        break;
+      case SEQUENCE_LOADER_RESET:
+        if (current_time - sequence_start_time >= 1000) {
+          current_sequence_state = SEQUENCE_MOTOR_ADVANCE_AND_RESET;
+          sequence_start_time = current_time;
+          loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
+        }
+        break;
+      case SEQUENCE_MOTOR_ADVANCE_AND_RESET:
+        if (current_time - sequence_start_time >= 1000) {  // Wait 2s for final motor positioning
+          current_sequence_state = SEQUENCE_IDLE;
+          sequence_start_time = current_time;
+          // Advance motor to next position
+          target_angle += PI / 3;
+          if (target_angle >= 2 * PI) {
+            target_angle = 0.0;
+          }
+          print("Motor Advance: Spinning to next position: %.2f\r\n", target_angle);
 
-    // Control feed motor based on swl switch position
-    if (dbus->swl == remote::UP) {
-      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);  // Feed motor contact when swl is UP
-    } else {
-      loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);  // Feed motor release when swl is not UP
+          print("Dart Loading Sequence: Completed successfully!\r\n");
+        }
+        break;
+      default:
+        break;
     }
 
     // Enhanced debug output for cascade control and switch states

@@ -39,7 +39,7 @@ void RM_RTOS_Default_Task(const void* arguments) {
     set_cursor(0, 0);
     clear_screen();
     print("CH0: %-4d CH1: %-4d CH2: %-4d CH3: %-4d ", dbus->ch0, dbus->ch1, dbus->ch2, dbus->ch3);
-    print("SWL: %d SWR: %d DIAL: %d @ %d ms\r\n", dbus->swl, dbus->swr, dbus->wheel, dbus->timestamp);
+    print("SWL: %d SWR: %d DIAL: %u @ %d ms\r\n", dbus->swl, dbus->swr, dbus->wheel.wheel, dbus->timestamp);
     osDelay(100);
   }
 }

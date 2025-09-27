@@ -26,6 +26,12 @@
 
 #define TARGET_SPEED 30
 
+float kp = 0;
+float ki = 0;
+float kd = 0;
+
+int16_t out = 0;
+
 bsp::CAN* can = nullptr;
 control::MotorCANBase* motor = nullptr;
 
@@ -43,7 +49,8 @@ void RM_RTOS_Default_Task(const void* args) {
 
   while (true) {
     float diff = motor->GetOmegaDelta(TARGET_SPEED);
-    int16_t out = pid.ComputeConstrainedOutput(diff);
+    pid.Reinit(kp, ki, kd);
+    out = pid.ComputeConstrainedOutput(diff);
     motor->SetOutput(out);
     control::MotorCANBase::TransmitOutput(motors, 1);
     motor->PrintData();

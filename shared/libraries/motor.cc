@@ -829,4 +829,206 @@ void Motor4310::SetRelativeTarget(float target) {
   relative_target_ = target;
 }
 
+//==================================================================================================
+// MotorDM3519
+//==================================================================================================
+
+/**
+ * @brief standard can motor callback for DM3519, used to update motor data
+ *
+ * @param data data that come from motor
+ * @param args pointer to a MotorDM3519 instance
+ */
+static void can_motor_dm3519_callback(const uint8_t data[], void* args) {
+  MotorDM3519* motor = reinterpret_cast<MotorDM3519*>(args);
+  motor->UpdateData(data);
+}
+
+MotorDM3519::MotorDM3519(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t mode)
+    : can_(can), rx_id_(rx_id), tx_id_(tx_id) {
+  can->RegisterRxCallback(rx_id, can_motor_dm3519_callback, this);
+  /* following the CAN id format from the DM3519 document */
+  mode_ = mode;
+  if (mode == MIT) {
+    tx_id_actual_ = tx_id;
+  } else if (mode == POS_VEL) {
+    tx_id_actual_ = tx_id + 0x100;
+  } else if (mode == VEL) {
+    tx_id_actual_ = tx_id + 0x200;
+  } else {
+    RM_EXPECT_TRUE(false, "Invalid mode number!");
+  }
+}
+
+void MotorDM3519::MotorEnable() {
+  // TODO: Implement motor enable sequence for DM3519
+  // Reference: Similar to Motor4310, send enable command
+  uint8_t data[8] = {0};
+  data[0] = 0xff;
+  data[1] = 0xff;
+  data[2] = 0xff;
+  data[3] = 0xff;
+  data[4] = 0xff;
+  data[5] = 0xff;
+  data[6] = 0xff;
+  data[7] = 0xfc;  // Enable command - verify with DM3519 datasheet
+  this->can_->Transmit(this->tx_id_actual_, data, 8);
+}
+
+void MotorDM3519::MotorDisable() {
+  // TODO: Implement motor disable sequence for DM3519
+  uint8_t data[8] = {0};
+  data[0] = 0xff;
+  data[1] = 0xff;
+  data[2] = 0xff;
+  data[3] = 0xff;
+  data[4] = 0xff;
+  data[5] = 0xff;
+  data[6] = 0xff;
+  data[7] = 0xfd;  // Disable command - verify with DM3519 datasheet
+  this->can_->Transmit(this->tx_id_actual_, data, 8);
+}
+
+void MotorDM3519::SetZeroPos() {
+  // TODO: Implement set zero position for DM3519
+  uint8_t data[8] = {0};
+  data[0] = 0xff;
+  data[1] = 0xff;
+  data[2] = 0xff;
+  data[3] = 0xff;
+  data[4] = 0xff;
+  data[5] = 0xff;
+  data[6] = 0xff;
+  data[7] = 0xfe;  // Set zero command - verify with DM3519 datasheet
+  this->can_->Transmit(this->tx_id_actual_, data, 8);
+}
+
+void MotorDM3519::SetOutput(float position, float velocity, float kp, float kd, float torque) {
+  // TODO: Implement MIT mode output for DM3519
+  // Store the parameters to be transmitted later
+  kp_set_ = kp;
+  kd_set_ = kd;
+  pos_set_ = position;
+  vel_set_ = velocity;
+  torque_set_ = torque;
+}
+
+void MotorDM3519::SetOutput(float position, float velocity) {
+  // TODO: Implement position-velocity mode output for DM3519
+  pos_set_ = position;
+  vel_set_ = velocity;
+}
+
+void MotorDM3519::SetOutput(float velocity) {
+  // TODO: Implement velocity mode output for DM3519
+  vel_set_ = velocity;
+}
+
+mode_t MotorDM3519::GetMode() const {
+  return mode_;
+}
+
+void MotorDM3519::TransmitOutput(MotorDM3519* motors[], uint8_t num_motors) {
+  // TODO: Implement transmission logic for DM3519
+  // This should encode the motor commands based on mode and transmit via CAN
+  for (uint8_t i = 0; i < num_motors; ++i) {
+    uint8_t data[8] = {0};
+    uint16_t kp_tmp, kd_tmp, pos_tmp, vel_tmp, torque_tmp;
+
+    if (motors[i]->GetMode() == MIT) {
+      // TODO: Verify encoding format with DM3519 datasheet
+      // This is based on Motor4310 format, may need adjustment
+      kp_tmp = float_to_uint(motors[i]->kp_set_, KP_MIN, KP_MAX, 12);
+      kd_tmp = float_to_uint(motors[i]->kd_set_, KD_MIN, KD_MAX, 12);
+      pos_tmp = float_to_uint(motors[i]->pos_set_, P_MIN, P_MAX, 16);
+      vel_tmp = float_to_uint(motors[i]->vel_set_, V_MIN, V_MAX, 12);
+      torque_tmp = float_to_uint(motors[i]->torque_set_, T_MIN, T_MAX, 12);
+
+      data[0] = pos_tmp >> 8;
+      data[1] = pos_tmp & 0x00ff;
+      data[2] = (vel_tmp >> 4) & 0x00ff;
+      data[3] = ((vel_tmp & 0x000f) << 4) | ((kp_tmp >> 8) & 0x000f);
+      data[4] = kp_tmp & 0x00ff;
+      data[5] = (kd_tmp >> 4) & 0x00ff;
+      data[6] = ((kd_tmp & 0x000f) << 4) | ((torque_tmp >> 8) & 0x000f);
+      data[7] = torque_tmp & 0x00ff;
+    } else if (motors[i]->GetMode() == POS_VEL) {
+      // TODO: Verify encoding format with DM3519 datasheet
+      uint8_t *pbuf, *vbuf;
+      pbuf = (uint8_t*)&motors[i]->pos_set_;
+      vbuf = (uint8_t*)&motors[i]->vel_set_;
+      data[0] = *pbuf;
+      data[1] = *(pbuf + 1);
+      data[2] = *(pbuf + 2);
+      data[3] = *(pbuf + 3);
+      data[4] = *vbuf;
+      data[5] = *(vbuf + 1);
+      data[6] = *(vbuf + 2);
+      data[7] = *(vbuf + 3);
+    } else if (motors[i]->GetMode() == VEL) {
+      // TODO: Verify encoding format with DM3519 datasheet
+      uint8_t* vbuf;
+      vbuf = (uint8_t*)&motors[i]->vel_set_;
+      data[0] = *vbuf;
+      data[1] = *(vbuf + 1);
+      data[2] = *(vbuf + 2);
+      data[3] = *(vbuf + 3);
+    } else {
+      RM_EXPECT_TRUE(false, "Invalid mode number!");
+    }
+
+    motors[i]->can_->Transmit(motors[i]->tx_id_actual_, data, 8);
+  }
+}
+
+void MotorDM3519::UpdateData(const uint8_t data[]) {
+  // TODO: Implement data parsing for DM3519
+  // Parse the incoming CAN data and update motor state
+  // This format may differ from Motor4310, verify with DM3519 datasheet
+  raw_pos_ = data[1] << 8 | data[2];
+  raw_vel_ = data[3] << 4 | (data[4] & 0xf0) >> 4;
+  raw_torque_ = data[5] | (data[4] & 0x0f) << 8;
+  raw_current_get_ = 0;  // TODO: Determine if DM3519 provides current feedback
+  raw_mosTemp_ = data[6];
+  raw_motorTemp_ = data[7];
+
+  // Convert raw values to physical units
+  theta_ = uint_to_float(raw_pos_, P_MIN, P_MAX, 16);
+  omega_ = uint_to_float(raw_vel_, V_MIN, V_MAX, 12);
+  torque_ = uint_to_float(raw_torque_, T_MIN, T_MAX, 12);
+
+  connection_flag_ = true;
+}
+
+void MotorDM3519::PrintData() const {
+  // TODO: Customize print format as needed
+  set_cursor(0, 0);
+  clear_screen();
+  print("DM3519 Position: % .4f ", GetTheta());
+  print("Velocity: % .4f ", GetOmega());
+  print("Torque: % .4f ", GetTorque());
+  print("Rotor temp: %d ", raw_motorTemp_);
+  print("MOS temp: %d \r\n", raw_mosTemp_);
+}
+
+float MotorDM3519::GetTheta() const {
+  return theta_;
+}
+
+float MotorDM3519::GetOmega() const {
+  return omega_;
+}
+
+float MotorDM3519::GetTorque() const {
+  return torque_;
+}
+
+float MotorDM3519::GetRelativeTarget() const {
+  return relative_target_;
+}
+
+void MotorDM3519::SetRelativeTarget(float target) {
+  relative_target_ = target;
+}
+
 } /* namespace control */

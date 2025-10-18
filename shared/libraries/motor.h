@@ -875,4 +875,167 @@ class Motor4310 {
   constexpr static float T_MAX = 18;
 };
 
+/**
+ * @brief DM3519 motor class
+ */
+class MotorDM3519 {
+ public:
+  /**
+   * Constructor for DM3519 motor
+   * CAN frame id for different modes:
+   *     MIT:                  actual CAN id.
+   *     position-velocity:    CAN id + 0x100.
+   *     velocity:             CAN id + 0x200.
+   * @param can    CAN object
+   * @param rx_id  Master id
+   * @param tx_id  CAN id *** NOT the actual CAN id but the id configured in software ***
+   * @param mode   0: MIT
+   *               1: position-velocity
+   *               2: velocity
+   */
+  MotorDM3519(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t mode);
+
+  /* implements data update callback */
+  void UpdateData(const uint8_t data[]);
+
+  /* enable DM3519; MUST be called after motor is powered up, otherwise SetOutput commands are ignored */
+  void MotorEnable();
+
+  /* disable DM3519 */
+  void MotorDisable();
+
+  /** sets current motor position as zero position (when motor is powered). DM3519 remembers this position
+   * when powered off. */
+  void SetZeroPos();
+
+  /**
+   * implements transmit output specifically for DM3519
+   * @param motors array of DM3519 motor objects
+   * @param num_motors number of motors to transmit
+   */
+  static void TransmitOutput(control::MotorDM3519* motors[], uint8_t num_motors);
+
+  /* implements data printout */
+  void PrintData() const;
+
+  /**
+   * Sets output parameters for DM3519 using the MIT mode
+   *
+   * Several control modes can be derived from the MIT mode:
+   * 1. Velocity mode:
+   *    Rotates the motor at a constant velocity by setting kp to zero, kd to a non-zero
+   *    value, and velocity to the target angular velocity
+   *    e.g. motor->SetOutput(0, 3, 0, 1, 0);
+   * 2. Position mode:
+   *    Rotates the motor to a target position by setting position to a relative target
+   *    position. Note: kd must be set to a NON-ZERO value to avoid oscillation
+   *    e.g. motor->SetOutput(2*PI, 0, 0.4, 0.05, 0);
+   * 3. Torque mode:
+   *    Rotates the motor at a given torque by setting torque to a desired value. kp and kd
+   *    should be set to zero.
+   *    e.g. motor->SetOutput(0, 0, 0, 0, 1);
+   *
+   * @param position relative target position in radian (can exceed 2*PI)
+   * @param velocity target angular velocity (rad/s)
+   * @param kp p gain (N/rad)
+   * @param kd d gain (N*s/rad)
+   * @param torque target torque (Nm)
+   */
+  void SetOutput(float position, float velocity, float kp, float kd, float torque);
+
+  /**
+   * Sets output parameters for DM3519 using position-velocity mode
+   * e.g. motor->SetOutput(2*PI, 1);
+   *
+   * @param position relative target position in radian (can exceed 2*PI)
+   * @param velocity maximum absolute angular velocity (rad/s)
+   */
+  void SetOutput(float position, float velocity);
+
+  /**
+   * Sets output parameters for DM3519 using velocity mode
+   *
+   * e.g. motor->SetOutput(1);
+   * @param velocity target angular velocity (rad/s)
+   */
+  void SetOutput(float velocity);
+
+  /**
+   * @brief get motor angle, in [rad]
+   * @return radian angle
+   */
+  float GetTheta() const;
+
+  /**
+   * @brief get motor angular velocity, in [rad / s]
+   * @return radian angular velocity
+   */
+  float GetOmega() const;
+
+  /**
+   * @brief get motor torque, in [Nm]
+   * @return motor torque
+   */
+  float GetTorque() const;
+
+  /**
+   * @brief get current motor mode
+   * @return current mode
+   */
+  mode_t GetMode() const;
+
+  /**
+   * @brief get motor target angle, in [rad]
+   * @return motor target angle
+   */
+  float GetRelativeTarget() const;
+
+  /**
+   * @brief Set motor target position, in [rad]
+   */
+  void SetRelativeTarget(float target);
+
+  volatile bool connection_flag_ = false;
+
+ private:
+  bsp::CAN* can_;
+  uint16_t rx_id_;
+  uint16_t tx_id_;
+  uint16_t tx_id_actual_;  // actual CAN id
+
+  volatile mode_t mode_;           // current motor mode
+  volatile float kp_set_ = 0;      // defined kp value
+  volatile float kd_set_ = 0;      // defined kd value
+  volatile float vel_set_ = 0;     // defined velocity
+  volatile float pos_set_ = 0;     // defined position
+  volatile float torque_set_ = 0;  // defined torque
+
+  volatile int16_t raw_pos_ = 0;          // actual position
+  volatile int16_t raw_vel_ = 0;          // actual velocity
+  volatile int16_t raw_torque_ = 0;       // actual torque
+  volatile int16_t raw_current_get_ = 0;  // actual current
+  volatile int16_t raw_motorTemp_ = 0;    // motor temp
+  volatile int16_t raw_mosTemp_ = 0;      // MOS temp
+  volatile float theta_ = 0;              // actual angular position
+  volatile float omega_ = 0;              // actual angular velocity
+  volatile float torque_ = 0;             // actual torque
+  float relative_target_ = 0;             // target position
+
+  // P control - adjust these based on DM3519 specifications
+  constexpr static float KP_MIN = 0;
+  constexpr static float KP_MAX = 500;
+  // D control
+  constexpr static float KD_MIN = 0;
+  constexpr static float KD_MAX = 5;
+  // position
+  constexpr static float P_MIN = -PI;
+  constexpr static float P_MAX = PI;
+  // velocity - adjust these based on DM3519 specifications
+  constexpr static float V_MIN = -45;
+  constexpr static float V_MAX = 45;
+  // torque - adjust these based on DM3519 specifications
+  constexpr static float T_MIN = -18;
+  constexpr static float T_MAX = 18;
+};
+
 } /* namespace control */

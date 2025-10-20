@@ -27,6 +27,9 @@ file(GLOB_RECURSE BSP_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/bsp/*.cc)
 file(GLOB_RECURSE LIB_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/libraries/*.cc)
 file(GLOB_RECURSE THIRD_PARTY_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/*.c)
 
+# Exclude FDCAN from general sources (only for DM_MC_02)
+list(FILTER BSP_SOURCES EXCLUDE REGEX ".*/bsp_fdcan\\.cc$")
+
 set(IRM_SOURCES ${BSP_SOURCES} ${LIB_SOURCES} ${THIRD_PARTY_SOURCES})
 set(IRM_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp
@@ -48,5 +51,25 @@ irm_add_board_specific_library(DJI_Board_TypeC_irm
 irm_add_board_specific_library(DM_MC_01_irm
         TARGET DM_MC_01
         SOURCES ${IRM_SOURCES}
+        INCLUDES ${IRM_INCLUDES}
+        DEPENDS eigen3)
+
+set(IRM_SOURCES_DM_MC_02 ${IRM_SOURCES})
+# Exclude unsupported BSP modules for DM_MC_02
+list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_imu\\.cc$")
+list(REMOVE_ITEM IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_imu.cc)
+list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_(laser|os|sdio|ultrasonic|usb|uart)\\.cc$")
+# Exclude CAN (use FDCAN instead) for DM_MC_02
+list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_can\\.cc$")
+# Exclude unsupported library modules for DM_MC_02 (no default implementations)
+# Note: Most modules now work with ARM DSP support
+list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/libraries/(chassis|fortress|gimbal|lidar07|pose)\\.cc$")
+list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/libraries/(minipc_protocol|oled|dbus|sbus)\\.cc$")
+# Add FDCAN BSP for DM_MC_02
+list(APPEND IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_fdcan.cc)
+
+irm_add_board_specific_library(DM_MC_02_irm
+        TARGET DM_MC_02
+        SOURCES ${IRM_SOURCES_DM_MC_02}
         INCLUDES ${IRM_INCLUDES}
         DEPENDS eigen3)

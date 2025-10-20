@@ -82,3 +82,8 @@ irm_add_arm_executable(${PROJECT_NAME}_m3510_PID
 irm_add_arm_executable(${PROJECT_NAME}_HERO_SERVO
         TARGET DJI_Board_TypeC
         SOURCES HERO_SERVO.cc)
+
+# DM_MC_02 board examples (using FDCAN)
+irm_add_arm_executable(${PROJECT_NAME}_m3508_mc02
+        TARGET DM_MC_02
+        SOURCES m3508_mc02.cc)

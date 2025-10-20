@@ -20,9 +20,23 @@
 
 #pragma once
 
+// Include appropriate CAN peripheral based on board type
+#ifdef BOARD_HAS_FDCAN
+#include "bsp_fdcan.h"
+#else
 #include "bsp_can.h"
+#endif
 
 namespace bsp {
+
+// Type alias for CAN interface (use FDCAN on supported boards, CAN otherwise)
+#ifdef BOARD_HAS_FDCAN
+using CanInterface = FDCAN;
+// Backward compatibility - libraries can use bsp::CAN which maps to FDCAN
+using CAN = FDCAN;
+#else
+using CanInterface = CAN;
+#endif
 
 typedef enum {
   VX,
@@ -57,7 +71,7 @@ typedef struct {
 
 class CanBridge {
  public:
-  CanBridge(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id);
+  CanBridge(bsp::CanInterface* can, uint16_t rx_id, uint16_t tx_id);
   void UpdateData(const uint8_t data[]);
   void TransmitOutput();
 
@@ -82,7 +96,7 @@ class CanBridge {
   bool self_check_flag = false;
   // each bit represents a flag correspond to specific motor e.g.(at index 0, it represents the motor 1's connection flag)
  private:
-  bsp::CAN* can_;
+  bsp::CanInterface* can_;
   uint16_t rx_id_;
   uint16_t tx_id_;
 };

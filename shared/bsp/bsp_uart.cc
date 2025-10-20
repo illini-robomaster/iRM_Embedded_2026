@@ -46,10 +46,19 @@ static HAL_StatusTypeDef UartStartDmaNoInt(UART_HandleTypeDef* huart, uint8_t* d
 
     /* Enable the DMA stream */
 #ifdef BOARD_HAS_UART_DMA_DOUBLE_BUFFER
-    HAL_DMAEx_MultiBufferStart(huart->hdmarx, (uint32_t)&huart->Instance->DR, (uint32_t)data0,
+#if defined(STM32H7)
+    HAL_DMAEx_MultiBufferStart(huart->hdmarx, (uint32_t)&huart->Instance->RDR, (uint32_t)data0,
                                (uint32_t)data1, size);
 #else
+    HAL_DMAEx_MultiBufferStart(huart->hdmarx, (uint32_t)&huart->Instance->DR, (uint32_t)data0,
+                               (uint32_t)data1, size);
+#endif
+#else
+#if defined(STM32H7)
+    HAL_DMA_Start(huart->hdmarx, (uint32_t)&huart->Instance->RDR, (uint32_t)data0, size);
+#else
     HAL_DMA_Start(huart->hdmarx, (uint32_t)&huart->Instance->DR, (uint32_t)data0, size);
+#endif
 #endif
 
     /* Clear the Overrun flag just before enabling the DMA Rx request */
@@ -183,8 +192,15 @@ int32_t UART::Read(uint8_t** data) {
 #else
   // software double buffer
   HAL_DMA_Abort(huart_->hdmarx);
+#if defined(STM32H7)
+  // STM32H7 uses RDR instead of DR
+  HAL_DMA_Start(huart_->hdmarx, (uint32_t)&huart_->Instance->RDR, (uint32_t)rx_data_[rx_index_],
+                rx_size_);
+#else
+  // STM32F4/F7 uses DR
   HAL_DMA_Start(huart_->hdmarx, (uint32_t)&huart_->Instance->DR, (uint32_t)rx_data_[rx_index_],
                 rx_size_);
+#endif
 #endif
 
   // exit critical session

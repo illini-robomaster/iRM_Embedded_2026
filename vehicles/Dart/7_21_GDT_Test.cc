@@ -1,6 +1,6 @@
 /****************************************************************************
  *                                                                          *
- *  Copyright (C) 2025 RoboMaster.                                          *
+ *  Copyright (C) 2023 RoboMaster.                                          *
  *  Illini RoboMaster @ University of Illinois at Urbana-Champaign          *
  *                                                                          *
  *  This program is free software: you can redistribute it and/or modify    *
@@ -18,6 +18,15 @@
  *                                                                          *
  ****************************************************************************/
 
+#include <memory>
+#include <cstdlib>
+
+#include "bsp_print.h"
+#include "bsp_uart.h"
+#include "cmsis_os.h"
+
+#include "main.h"
+
 #include "bsp_gpio.h"
 #include "bsp_print.h"
 #include "cmsis_os.h"
@@ -28,62 +37,81 @@
 #include "motor.h"
 #include "utils.h"
 
-#define KEY_GPIO_GROUP GPIOA
-#define KEY_GPIO_PIN GPIO_PIN_0
+control::MotorCANBase* yaw_motor;
 
-bsp::CAN* can1 = NULL;
-bsp::GPIO* key = nullptr;
-control::MotorCANBase* load_motor = NULL;
-remote::DBUS* dbus = nullptr;
+static bsp::CAN* can1 = nullptr; 
+float yaw_target_speed = 0;
+float target_diff_threshold = 5;
 
 
+#define RX_SIGNAL (1 << 0)
 
+extern osThreadId_t defaultTaskHandle;
 
-void RM_RTOS_Init() {
-  print_use_uart(&huart1);
-  can1 = new bsp::CAN(&hcan1, true);
-  load_motor = new control::Motor6020(can1, 0x207);
-  dbus = new remote::DBUS(&huart3);
+class CustomUART : public bsp::UART {
+ public:
+  using bsp::UART::UART;
+
+ protected:
+  /* notify application when rx data is pending read */
+  void RxCompleteCallback() override final { osThreadFlagsSet(defaultTaskHandle, RX_SIGNAL); }
+};
+
+void RM_RTOS_Init(){
+    print_use_uart(&huart6);
+    can1 = new bsp::CAN(&hcan1, true);
+    yaw_motor = new control::Motor3508(can1, 0x201);
 }
+void RM_RTOS_Default_Task(const void* argument) {
+  UNUSED(argument);
 
-void RM_RTOS_Default_Task(const void* args) {
-  UNUSED(args);
-  print("ok!\r\n");
-  
-  osDelay(500);  // DBUS initialization needs time
-  
-  float pid_params[3] = {55000.0, 10.0, 100.0};
-  control::ConstrainedPID pid_(pid_params, 30000, 30000);
+  control::MotorCANBase* yaw_motors[] = {yaw_motor};
+  control::PIDController pid(20, 15, 30);
+  uint8_t* data;
 
-  float target_angle = 0.0;
-  control::MotorCANBase* motors[] = {load_motor};
-  int16_t command;
-  
-  // Edge detector for dbus channel 1 > 300
-  BoolEdgeDetector ch1_edge_detector(false);
+  auto uart = std::make_unique<CustomUART>(&huart1);  // see cmake for which uart
+  uart->SetupRx(50);
+  uart->SetupTx(50);
 
   while (true) {
-    command = pid_.ComputeOutput(load_motor->GetThetaDelta(target_angle));
-    
-    // Update edge detector with ch1 > 300 condition
-    ch1_edge_detector.input(dbus->ch1 > 300);
-    
-    // Check for positive edge (transition from false to true)
-    if (ch1_edge_detector.posEdge()) {
-      target_angle += PI/3;
-      if (target_angle >= 2 * PI) {
-        target_angle = 0.0;
+    /* wait until rx data is available */
+    uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
+    if (flags & RX_SIGNAL) {
+      /* time the non-blocking rx / tx calls (should be <= 1 osTick) */
+      uint32_t length = uart->Read(&data);
+      
+      // Check if data starts with '!' and has at least one more character
+      if (length >= 2 && data[0] == '!') {
+        // Create a null-terminated buffer for safe parsing
+        char buffer[16];
+        uint32_t num_len = length - 1;  // Length excluding '!'
+        if (num_len > 15) num_len = 15;  // Limit to buffer size
+        
+        // Copy the number part (skip '!') and null-terminate
+        for (uint32_t i = 0; i < num_len; i++) {
+          buffer[i] = data[i + 1];
+        }
+        buffer[num_len] = '\0';
+        
+        // Parse the number
+        int number = atoi(buffer);
+        
+        // Print only the number
+        print("%d\r\n", number);
+        if (number > target_diff_threshold && number < 999) {
+          yaw_target_speed = 40;
+        } else if (number < -target_diff_threshold) {
+          yaw_target_speed = -40;
+        } else {
+          yaw_target_speed = 0;
+        }
       }
-      print("Edge detected! New target angle: %.2f\r\n", target_angle);
     }
-
-    // print("command: %d \r\n", command);
-    print("target angle: %.2f, actual angle: %.2f, command: %d, ch1: %d\r\n", 
-          target_angle, load_motor->GetTheta(), command, dbus->ch1);
-    
-    load_motor->SetOutput(command);
-    control::MotorCANBase::TransmitOutput(motors, 1);
-    osDelay(2);
+    float diff = yaw_motor->GetOmegaDelta(yaw_target_speed);  
+    int16_t out = pid.ComputeConstrainedOutput(diff);
+    yaw_motor->SetOutput(out);
+    control::MotorCANBase::TransmitOutput(yaw_motors, 1);
+    yaw_motor->PrintData();
   }
+  
 }
-

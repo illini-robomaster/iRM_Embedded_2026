@@ -860,6 +860,16 @@ MotorDM3519::MotorDM3519(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t m
   }
 }
 
+// default constructor
+MotorDM3519::MotorDM3519() {
+  // Initialize default values
+  can_ = nullptr;
+  rx_id_ = 0;
+  tx_id_ = 0;
+  mode_ = VEL;
+  tx_id_actual_ = 0;
+}
+
 void MotorDM3519::MotorEnable() {
   // TODO: Implement motor enable sequence for DM3519
   // Reference: Similar to Motor4310, send enable command

@@ -64,6 +64,10 @@ irm_add_arm_executable(${PROJECT_NAME}_m2006_reload_modes
     TARGET DJI_Board_TypeC
     SOURCES m2006_reload_modes.cc)
 
+irm_add_arm_executable(${PROJECT_NAME}_dm3519_vel
+        TARGET DJI_Board_TypeC
+        SOURCES dm3519_vel.cc)
+
 irm_add_arm_executable(${PROJECT_NAME}_m4310_mit
         TARGET DJI_Board_TypeC
         SOURCES m4310_mit.cc)

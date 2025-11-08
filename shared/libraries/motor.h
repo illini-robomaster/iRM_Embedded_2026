@@ -895,6 +895,8 @@ class MotorDM3519 {
    */
   MotorDM3519(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t mode);
 
+  MotorDM3519();
+
   /* implements data update callback */
   void UpdateData(const uint8_t data[]);
 

@@ -68,11 +68,13 @@ void RM_RTOS_Threads_Init(void) {
 
 bsp::CAN* can = nullptr;
 control::MotorDM3519* motor[4];
+control::Motor6020* yaw_motor;
 remote::DBUS* dbus = nullptr;
 
 float original_max_output_vel_rad_per_s = 395/60.0f*2*PI; //395 rpm = 41.36 rad/s
 float original_gear_ratio = 3591.0f/187.0f; 
 float new_gear_ratio = 268.0f/17.0f; 
+const float YAW_MOTOR_OFFSET = 4.54f; // in rad
 
 void RM_RTOS_Init() {
   print_use_uart(&huart1);
@@ -88,8 +90,9 @@ void RM_RTOS_Init() {
   /* Make sure motor is set to the correct mode (in helper tool). Otherwise, motor won't start */
   motor[0] = new control::MotorDM3519(can, 0x00, 0x01, control::VEL);
   motor[1] = new control::MotorDM3519(can, 0x02, 0x03, control::VEL);
-  motor[2] = new control::MotorDM3519(can, 0x04, 0x05, control::VEL);
+  motor[2] = new control::MotorDM3519(can, 0x08, 0x09, control::VEL);
   motor[3] = new control::MotorDM3519(can, 0x06, 0x07, control::VEL);
+  yaw_motor = new control::Motor6020(can, 0x205);
   dbus = new remote::DBUS(&huart3);
 
   // IMU initialization
@@ -126,6 +129,8 @@ void RM_RTOS_Default_Task(const void* args) {
   UNUSED(args);
 
   control::MotorDM3519* motors[] = {motor[0], motor[1], motor[2], motor[3]};
+  float pid_params[3] = {20000.0, 1.0, 10.0};
+  control::ConstrainedPID pid_(pid_params, 30000, 30000);
 
   while(dbus->swr != remote::DOWN){}  // flip swr to start
 
@@ -142,9 +147,11 @@ void RM_RTOS_Default_Task(const void* args) {
   motor[3]->MotorEnable();
   imu->Calibrate();
 
-  float yaw_zero = imu->INS_angle[2];
-
   bool enabled = true;
+  float yaw_target = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
+  int16_t command;
+  float gimbal_yaw_in_field_reference = 0.0f;
+
   while (true) {
 
     // disable logic
@@ -167,24 +174,31 @@ void RM_RTOS_Default_Task(const void* args) {
         enabled = true;
       }
     }
-
-    // reset heading
-    if(dbus->swl == remote::UP)
-      yaw_zero = imu->INS_angle[0];
+    gimbal_yaw_in_field_reference = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
 
     float vel[4];
 
     float y = -clip<float>(dbus->ch0 / 660.0 * 30.0, -30, 30); // forward
     float x = clip<float>(dbus->ch1 / 660.0 * 30.0, -30, 30); // left
-    float omega = clip<float>(dbus->ch2 / 660.0 * 30.0, -30, 30); // yaw
+    float omega = clip<float>(-dbus->ch2 / 660.0 * 30.0, -30, 30); // yaw
+    yaw_target += omega * 0.01f; // yaw target in field reference rad * 10ms
+
+
+    float delta_theta = yaw_target - gimbal_yaw_in_field_reference;
+    float cos = cosf(delta_theta);
+    float sin = sinf(delta_theta);
+    delta_theta = atan2f(sin, cos); // wrap to [-pi, pi]
+    command = pid_.ComputeOutput(delta_theta);
+
     // float y = 0;
     // float x = 0;
+    // float omega = 0;
 
-    float gyro_angle = imu->INS_angle[0] - yaw_zero; // in rad
+    float chasis_yaw_in_field_reference = gimbal_yaw_in_field_reference - imu->INS_angle[0]; // in rad
 
     // rotate the x,y according to the robot's heading
-    float temp_x = x * cosf(-gyro_angle) - y * sinf(-gyro_angle);
-    float temp_y = x * sinf(-gyro_angle) + y * cosf(-gyro_angle);
+    float temp_x = x * cosf(chasis_yaw_in_field_reference) - y * sinf(chasis_yaw_in_field_reference);
+    float temp_y = x * sinf(chasis_yaw_in_field_reference) + y * cosf(chasis_yaw_in_field_reference);
     x = temp_x;
     y = temp_y;
 
@@ -194,23 +208,27 @@ void RM_RTOS_Default_Task(const void* args) {
     float beta = (y + x) / 1.4142f;
 
     // max output for omega while ensure translation
-    float max_omega = abs(40.0f - max(fabsf(alpha), fabsf(beta)));
-    omega = clip<float>(omega, -max_omega, max_omega);
+    float max_omega = abs(30.0f - max(fabsf(alpha), fabsf(beta)));
+    float chassis_omega = dbus->swl == remote::UP ? 15.0f : 0.0f;
+    chassis_omega = clip<float>(chassis_omega, -max_omega, max_omega);
 
-    vel[0] = -beta + omega;
-    vel[1] = beta + omega;
-    vel[2] = -alpha + omega;
-    vel[3] = alpha + omega;
+    vel[0] = -beta + chassis_omega;
+    vel[1] = beta + chassis_omega;
+    vel[2] = -alpha + chassis_omega;
+    vel[3] = alpha + chassis_omega;
 
     set_cursor(0, 0);
     clear_screen();
-    print("yaw: %f, pitch %f, roll %f\r\n", imu->INS_angle[0], imu->INS_angle[1], imu->INS_angle[2]);
 
+    print("g_f: %.2f c_f: %.2f \r\n", gimbal_yaw_in_field_reference, chasis_yaw_in_field_reference);
+    UNUSED(command);
     motor[0]->SetOutput(vel[0]);
     motor[1]->SetOutput(vel[1]);
     motor[2]->SetOutput(vel[2]);
     motor[3]->SetOutput(vel[3]);
+    yaw_motor->SetOutput(command);
     control::MotorDM3519::TransmitOutput(motors, 4);
+    control::Motor6020::TransmitOutput((control::MotorCANBase**)(&yaw_motor), 1);
     osDelay(10);
   }
 }

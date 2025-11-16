@@ -69,12 +69,15 @@ void RM_RTOS_Threads_Init(void) {
 bsp::CAN* can = nullptr;
 control::MotorDM3519* motor[4];
 control::Motor6020* yaw_motor;
+control::Motor4310* pitch_motor;
 remote::DBUS* dbus = nullptr;
 
 float original_max_output_vel_rad_per_s = 395/60.0f*2*PI; //395 rpm = 41.36 rad/s
 float original_gear_ratio = 3591.0f/187.0f; 
 float new_gear_ratio = 268.0f/17.0f; 
 const float YAW_MOTOR_OFFSET = 4.54f; // in rad
+const float PITCH_PHYSICAL_OFFSET = 33.0f * PI / 180.0f; // 0 in encoder is 33 degrees in physical position, also physical maximum
+const float PITCH_PHYSICAL_MIN = -24.0f * PI / 180.0f; // -24 degrees in physical position
 
 void RM_RTOS_Init() {
   print_use_uart(&huart1);
@@ -93,6 +96,7 @@ void RM_RTOS_Init() {
   motor[2] = new control::MotorDM3519(can, 0x08, 0x09, control::VEL);
   motor[3] = new control::MotorDM3519(can, 0x06, 0x07, control::VEL);
   yaw_motor = new control::Motor6020(can, 0x205);
+  pitch_motor = new control::Motor4310(can, 0x0D, 0x0C, control::MIT);
   dbus = new remote::DBUS(&huart3);
 
   // IMU initialization
@@ -129,6 +133,7 @@ void RM_RTOS_Default_Task(const void* args) {
   UNUSED(args);
 
   control::MotorDM3519* motors[] = {motor[0], motor[1], motor[2], motor[3]};
+  control::Motor4310* pitch_motors[] = {pitch_motor};
   float pid_params[3] = {20000.0, 1.0, 10.0};
   control::ConstrainedPID pid_(pid_params, 30000, 30000);
 
@@ -146,6 +151,10 @@ void RM_RTOS_Default_Task(const void* args) {
   motor[3]->SetZeroPos();
   motor[3]->MotorEnable();
   imu->Calibrate();
+  pitch_motor->SetZeroPos(); // pitch motor zero pos, comment if calibrated already
+  pitch_motor->MotorEnable();
+  float pitch_physical = pitch_motor->GetTheta() + PITCH_PHYSICAL_OFFSET;
+  osDelay(100);
 
   bool enabled = true;
   float yaw_target = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
@@ -161,6 +170,7 @@ void RM_RTOS_Default_Task(const void* args) {
         motor[1]->MotorDisable();
         motor[2]->MotorDisable();
         motor[3]->MotorDisable();  
+        pitch_motor->MotorDisable();
         enabled = false;
       }
       osDelay(100);
@@ -170,7 +180,8 @@ void RM_RTOS_Default_Task(const void* args) {
         motor[0]->MotorEnable();
         motor[1]->MotorEnable();
         motor[2]->MotorEnable();
-        motor[3]->MotorEnable();  
+        motor[3]->MotorEnable();
+        pitch_motor->MotorEnable();
         enabled = true;
       }
     }
@@ -180,9 +191,11 @@ void RM_RTOS_Default_Task(const void* args) {
 
     float y = -clip<float>(dbus->ch0 / 660.0 * 30.0, -30, 30); // forward
     float x = clip<float>(dbus->ch1 / 660.0 * 30.0, -30, 30); // left
-    float omega = clip<float>(-dbus->ch2 / 660.0 * 30.0, -30, 30); // yaw
-    yaw_target += omega * 0.01f; // yaw target in field reference rad * 10ms
-
+    float yaw_omega = clip<float>(-dbus->ch2 / 660.0 * 30.0, -30, 30); // yaw
+    float pitch_omega = clip<float>(dbus->ch3 / 660.0 * 15.0, -15, 15); // pitch
+    yaw_target += yaw_omega * 0.01f; // yaw target in field reference rad * 10ms
+    pitch_physical += pitch_omega /200;
+    pitch_physical = clip<float>(pitch_physical, PITCH_PHYSICAL_MIN, PITCH_PHYSICAL_OFFSET);
 
     float delta_theta = yaw_target - gimbal_yaw_in_field_reference;
     float cos = cosf(delta_theta);
@@ -227,8 +240,12 @@ void RM_RTOS_Default_Task(const void* args) {
     motor[2]->SetOutput(vel[2]);
     motor[3]->SetOutput(vel[3]);
     yaw_motor->SetOutput(command);
+
+    float pitch_rotor = pitch_physical - PITCH_PHYSICAL_OFFSET;
+    pitch_motor->SetOutput(pitch_rotor, pitch_omega, 30, 0.5, 0);
     control::MotorDM3519::TransmitOutput(motors, 4);
     control::Motor6020::TransmitOutput((control::MotorCANBase**)(&yaw_motor), 1);
+    control::Motor4310::TransmitOutput(pitch_motors, 1);
     osDelay(10);
   }
 }

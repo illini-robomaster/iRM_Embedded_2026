@@ -91,10 +91,10 @@ void RM_RTOS_Init() {
    *  VEL: velocity mode  */
 
   /* Make sure motor is set to the correct mode (in helper tool). Otherwise, motor won't start */
-  motor[0] = new control::MotorDM3519(can, 0x00, 0x01, control::VEL);
-  motor[1] = new control::MotorDM3519(can, 0x02, 0x03, control::VEL);
-  motor[2] = new control::MotorDM3519(can, 0x08, 0x09, control::VEL);
-  motor[3] = new control::MotorDM3519(can, 0x06, 0x07, control::VEL);
+  motor[0] = new control::MotorDM3519(can, 0x00, 0x01, control::VEL); // front right
+  motor[1] = new control::MotorDM3519(can, 0x02, 0x03, control::VEL); // back left
+  motor[2] = new control::MotorDM3519(can, 0x08, 0x09, control::VEL); // back right
+  motor[3] = new control::MotorDM3519(can, 0x06, 0x07, control::VEL); // front left
   yaw_motor = new control::Motor6020(can, 0x205);
   pitch_motor = new control::Motor4310(can, 0x0D, 0x0C, control::MIT);
   dbus = new remote::DBUS(&huart3);
@@ -151,7 +151,7 @@ void RM_RTOS_Default_Task(const void* args) {
   motor[3]->SetZeroPos();
   motor[3]->MotorEnable();
   imu->Calibrate();
-  pitch_motor->SetZeroPos(); // pitch motor zero pos, comment if calibrated already
+  // pitch_motor->SetZeroPos(); // pitch motor zero pos, comment if calibrated already
   pitch_motor->MotorEnable();
   float pitch_physical = pitch_motor->GetTheta() + PITCH_PHYSICAL_OFFSET;
   osDelay(100);
@@ -159,7 +159,7 @@ void RM_RTOS_Default_Task(const void* args) {
   bool enabled = true;
   float yaw_target = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
   int16_t command;
-  float gimbal_yaw_in_field_reference = 0.0f;
+  float gimbal_yaw_measured_in_field_reference = 0.0f;
 
   while (true) {
 
@@ -185,7 +185,7 @@ void RM_RTOS_Default_Task(const void* args) {
         enabled = true;
       }
     }
-    gimbal_yaw_in_field_reference = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
+    gimbal_yaw_measured_in_field_reference = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
 
     float vel[4];
 
@@ -197,21 +197,17 @@ void RM_RTOS_Default_Task(const void* args) {
     pitch_physical += pitch_omega /200;
     pitch_physical = clip<float>(pitch_physical, PITCH_PHYSICAL_MIN, PITCH_PHYSICAL_OFFSET);
 
-    float delta_theta = yaw_target - gimbal_yaw_in_field_reference;
-    float cos = cosf(delta_theta);
-    float sin = sinf(delta_theta);
-    delta_theta = atan2f(sin, cos); // wrap to [-pi, pi]
-    command = pid_.ComputeOutput(delta_theta);
+    float delta_yaw = yaw_target - gimbal_yaw_measured_in_field_reference;
+    float cos = cosf(delta_yaw);
+    float sin = sinf(delta_yaw);
+    delta_yaw = atan2f(sin, cos); // wrap to [-pi, pi]
+    command = pid_.ComputeOutput(delta_yaw);
 
-    // float y = 0;
-    // float x = 0;
-    // float omega = 0;
-
-    float chasis_yaw_in_field_reference = gimbal_yaw_in_field_reference - imu->INS_angle[0]; // in rad
+    float chasis_yaw_measured_in_field_reference = gimbal_yaw_measured_in_field_reference - imu->INS_angle[0]; // in rad
 
     // rotate the x,y according to the robot's heading
-    float temp_x = x * cosf(chasis_yaw_in_field_reference) - y * sinf(chasis_yaw_in_field_reference);
-    float temp_y = x * sinf(chasis_yaw_in_field_reference) + y * cosf(chasis_yaw_in_field_reference);
+    float temp_x = x * cosf(chasis_yaw_measured_in_field_reference) - y * sinf(chasis_yaw_measured_in_field_reference);
+    float temp_y = x * sinf(chasis_yaw_measured_in_field_reference) + y * cosf(chasis_yaw_measured_in_field_reference);
     x = temp_x;
     y = temp_y;
 
@@ -222,30 +218,32 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // max output for omega while ensure translation
     float max_omega = abs(30.0f - max(fabsf(alpha), fabsf(beta)));
-    float chassis_omega = dbus->swl == remote::UP ? 15.0f : 0.0f;
-    chassis_omega = clip<float>(chassis_omega, -max_omega, max_omega);
+    float chassis_yaw_omega_target = dbus->swl == remote::UP ? 15.0f : 0.0f;
+    chassis_yaw_omega_target = clip<float>(chassis_yaw_omega_target, -max_omega, max_omega);
 
-    vel[0] = -beta + chassis_omega;
-    vel[1] = beta + chassis_omega;
-    vel[2] = -alpha + chassis_omega;
-    vel[3] = alpha + chassis_omega;
+    vel[0] = -beta + chassis_yaw_omega_target;
+    vel[1] = beta + chassis_yaw_omega_target;
+    vel[2] = -alpha + chassis_yaw_omega_target;
+    vel[3] = alpha + chassis_yaw_omega_target;
 
     set_cursor(0, 0);
     clear_screen();
 
-    print("g_f: %.2f c_f: %.2f \r\n", gimbal_yaw_in_field_reference, chasis_yaw_in_field_reference);
+    print("g_f: %.2f c_f: %.2f \r\n", gimbal_yaw_measured_in_field_reference, chasis_yaw_measured_in_field_reference);
     UNUSED(command);
     motor[0]->SetOutput(vel[0]);
     motor[1]->SetOutput(vel[1]);
     motor[2]->SetOutput(vel[2]);
     motor[3]->SetOutput(vel[3]);
-    yaw_motor->SetOutput(command);
+    float yaw_kF = 400.0f;
+    yaw_motor->SetOutput(command + chassis_yaw_omega_target * yaw_kF);
 
     float pitch_rotor = pitch_physical - PITCH_PHYSICAL_OFFSET;
     pitch_motor->SetOutput(pitch_rotor, pitch_omega, 30, 0.5, 0);
     control::MotorDM3519::TransmitOutput(motors, 4);
     control::Motor6020::TransmitOutput((control::MotorCANBase**)(&yaw_motor), 1);
     control::Motor4310::TransmitOutput(pitch_motors, 1);
+    // after transmit, DM's motors return their data
     osDelay(10);
   }
 }

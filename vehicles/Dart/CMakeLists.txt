@@ -25,6 +25,10 @@ irm_add_arm_executable(dart_gimbal
         TARGET DJI_Board_TypeC
         SOURCES dart_gimbal.cc)
 
+irm_add_arm_executable(dart_gimbal_trial
+        TARGET DJI_Board_TypeC
+        SOURCES dart_gimbal_trial.cc)
+
 irm_add_arm_executable(dart_gimbal_load_test
         TARGET DJI_Board_TypeA
         SOURCES dart_loading_example.cc)

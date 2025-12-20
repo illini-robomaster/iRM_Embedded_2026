@@ -82,7 +82,12 @@
  
  static uint16_t load_motor_temperature = 0;
  static int16_t load_motor_current = 0;
- 
+
+ static bool motor_cooling_state = false;  // flag for temperature protection
+
+ #define MOTOR_TEMP_HIGH_THRESHOLD 80  // stop motor when temperature exceeds this
+ #define MOTOR_TEMP_LOW_THRESHOLD 40   // resume motor when temperature drops below this
+
  float Kp_load = 50;
  float Ki_load = 15;
  float Kd_load = 65;
@@ -136,6 +141,28 @@
  
 
    while (true) {
+     // Temperature protection logic with hysteresis
+     load_motor_temperature = load_motor_1->GetTemp();
+     if (load_motor_temperature > MOTOR_TEMP_HIGH_THRESHOLD && !motor_cooling_state) {
+       motor_cooling_state = true;  // enter cooling state
+       print("Motor overheated! Temperature: %d C, entering cooling state\r\n", load_motor_temperature);
+     } else if (load_motor_temperature < MOTOR_TEMP_LOW_THRESHOLD && motor_cooling_state) {
+       motor_cooling_state = false;  // exit cooling state
+       print("Motor cooled down! Temperature: %d C, resuming operation\r\n", load_motor_temperature);
+     }
+
+     // If in cooling state, skip normal operations and stop load motors
+     if (motor_cooling_state) {
+       // Stop load motors during cooling (force_motor continues to operate)
+       load_motor_1->SetOutput(0);
+       load_motor_2->SetOutput(0);
+       control::MotorCANBase* motors_can1_cooling[] = {load_motor_1, load_motor_2};
+       control::MotorCANBase::TransmitOutput(motors_can1_cooling, 2);
+       print("Cooling... Temperature: %d C\r\n", load_motor_temperature);
+       osDelay(500);  // longer delay during cooling
+       continue;  // skip the rest of the loop
+     }
+
      // This is for the trigger motor
      if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output, this will release the dart and launch it
        trigger_motor->SetOutput(0);
@@ -202,8 +229,6 @@
      load_motor_2->SetOutput(load_motor_2_output);
      force_motor->SetOutput(force_motor_output);
      loader_catridge_motor->SetOutput(loader_catridge_motor_output);
-     load_motor_temperature = load_motor_1->GetTemp();
-     load_motor_current = load_motor_1->GetCurr();
      control::MotorCANBase::TransmitOutput(motors_can1_load, 3);  // Transmit the output to the load motor
      control::MotorCANBase::TransmitOutput(motor_loader_catridge, 1);  // Transmit the output to the loader catridge motor
      // Three loading points in theta for 6.255 radian, increase by 0.3333 to clear the passage for dart launch
@@ -216,8 +241,11 @@
      control::MotorCANBase::TransmitOutput(yaw_motors, 1);
      yaw_motor->PrintData();
 
+     // Update motor status
+     load_motor_current = load_motor_1->GetCurr();
+
     //  print("loader catridge motor angle: % .4f \r\n ", loader_catridge_motor->GetTheta());
-     print("target theta load: %.4f \r\n", target_theta_loader_catridge);
+     print("target theta load: %.4f, Motor Temp: %d C\r\n", target_theta_loader_catridge, load_motor_temperature);
      switch (curr_state) {
        case 0:  // release state
          loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);

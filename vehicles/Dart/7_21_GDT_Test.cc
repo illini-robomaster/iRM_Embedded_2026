@@ -42,7 +42,7 @@
 control::MotorCANBase* yaw_motor;
 
 static bsp::CAN* can1 = nullptr; 
-float yaw_target_speed = 0;
+float yaw_target_speed = 20;
 float target_diff_threshold = 5;
 
 static bsp::Laser* laser = nullptr;

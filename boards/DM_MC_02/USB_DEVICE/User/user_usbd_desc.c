@@ -121,6 +121,10 @@ uint8_t * USBD_HS_ProductStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length
 uint8_t * USBD_HS_SerialStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length);
 uint8_t * USBD_HS_ConfigStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length);
 uint8_t * USBD_HS_InterfaceStrDescriptor(USBD_SpeedTypeDef speed, uint16_t *length);
+/* BOS descriptor - required when USBD_LPM_ENABLED == 1U (CubeMX bug fix) */
+#if ((USBD_LPM_ENABLED == 1U) || (USBD_CLASS_BOS_ENABLED == 1))
+uint8_t * USBD_HS_USR_BOSDescriptor(USBD_SpeedTypeDef speed, uint16_t *length);
+#endif
 
 /**
   * @}
@@ -140,6 +144,10 @@ USBD_DescriptorsTypeDef HS_Desc =
 , USBD_HS_SerialStrDescriptor
 , USBD_HS_ConfigStrDescriptor
 , USBD_HS_InterfaceStrDescriptor
+/* BOS descriptor - required when USBD_LPM_ENABLED == 1U (CubeMX bug fix) */
+#if ((USBD_LPM_ENABLED == 1U) || (USBD_CLASS_BOS_ENABLED == 1))
+, USBD_HS_USR_BOSDescriptor
+#endif
 };
 
 #if defined ( __ICCARM__ ) /* IAR Compiler */

@@ -29,6 +29,8 @@ file(GLOB_RECURSE THIRD_PARTY_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/third_party/*.
 
 # Exclude FDCAN from general sources (only for DM_MC_02)
 list(FILTER BSP_SOURCES EXCLUDE REGEX ".*/bsp_fdcan\\.cc$")
+# Exclude USB stub from general sources (only for DM_MC_02)
+list(FILTER BSP_SOURCES EXCLUDE REGEX ".*/bsp_usb_stub\\.cc$")
 
 set(IRM_SOURCES ${BSP_SOURCES} ${LIB_SOURCES} ${THIRD_PARTY_SOURCES})
 set(IRM_INCLUDES
@@ -58,7 +60,9 @@ set(IRM_SOURCES_DM_MC_02 ${IRM_SOURCES})
 # Exclude unsupported BSP modules for DM_MC_02
 list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_imu\\.cc$")
 list(REMOVE_ITEM IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_imu.cc)
-list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_(laser|os|sdio|ultrasonic|usb|uart)\\.cc$")
+list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_(laser|os|sdio|ultrasonic|usb)\\.cc$")
+# Add USB stub for DM_MC_02 (provides empty implementations)
+list(APPEND IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_usb_stub.cc)
 # Exclude CAN (use FDCAN instead) for DM_MC_02
 list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_can\\.cc$")
 # Exclude unsupported library modules for DM_MC_02 (no default implementations)

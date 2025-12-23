@@ -25,7 +25,8 @@ set(MCU_LINE STM32H723xx)
 set(MCU_ARCH cortex-m7)
 set(MCU_FLOAT_ABI hard)
 set(MCU_FPU fpv5-d16)
-set(MCU_LINKER_SCRIPT stm32h723vgtx_flash.ld)
+# Use custom linker script with heap in AXI SRAM for DMA compatibility
+set(MCU_LINKER_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/cmake/stm32h723vgtx_flash_custom.ld)
 set(MCU_OPTIONS -mcpu=${MCU_ARCH} -mthumb -mthumb-interwork
         -mfpu=${MCU_FPU} -mfloat-abi=${MCU_FLOAT_ABI})
 
@@ -41,7 +42,7 @@ target_compile_definitions(${PROJECT_NAME}_interface INTERFACE ${MCU_LINE}
         USE_HAL_DRIVER)
 target_compile_options(${PROJECT_NAME}_interface INTERFACE ${MCU_OPTIONS})
 target_link_options(${PROJECT_NAME}_interface INTERFACE
-        ${MCU_OPTIONS} -T${CMAKE_CURRENT_SOURCE_DIR}/${MCU_LINKER_SCRIPT})
+        ${MCU_OPTIONS} -T${MCU_LINKER_SCRIPT})
 
 target_link_libraries(${PROJECT_NAME}_interface INTERFACE board_interface)
 target_include_directories(${PROJECT_NAME}_interface INTERFACE
@@ -56,7 +57,7 @@ target_include_directories(${PROJECT_NAME}_interface INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
         ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/ST/STM32_USB_Device_Library/Core/Inc
         ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS
+        ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2
         ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F)
 
 #####################################################
@@ -78,8 +79,16 @@ file(GLOB_RECURSE DRIVER_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Drivers/*.c)
 file(GLOB_RECURSE MIDDLEWARE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/*.c)
 file(GLOB_RECURSE STARTUP_ASM ${CMAKE_CURRENT_SOURCE_DIR}/startup_stm32h723xx.s)
 
+# Exclude CMSIS_RTOS V1 cmsis_os.c - we use V2 (cmsis_os2.c) instead
+list(FILTER MIDDLEWARE_SOURCES EXCLUDE REGEX "CMSIS_RTOS/cmsis_os\\.c$")
+
+# Exclude CubeMX-generated usbd_desc.c - use our user-maintained version instead
+# (fixes CubeMX bug where USBD_LPM_ENABLED=1 but BOS descriptor is missing)
+list(FILTER USB_SOURCES EXCLUDE REGEX "USB_DEVICE/App/usbd_desc\\.c$")
+set(USER_USB_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/USB_DEVICE/User/user_usbd_desc.c)
+
 add_library(${PROJECT_NAME} OBJECT
-        ${CORE_SOURCES} ${USB_SOURCES}
+        ${CORE_SOURCES} ${USB_SOURCES} ${USER_USB_SOURCES}
         ${DRIVER_SOURCES} ${MIDDLEWARE_SOURCES} ${STARTUP_ASM})
 # ST libraries throws those warnings
 target_compile_options(${PROJECT_NAME} PRIVATE

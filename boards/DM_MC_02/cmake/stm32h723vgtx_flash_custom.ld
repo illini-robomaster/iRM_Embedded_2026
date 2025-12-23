@@ -1,50 +1,15 @@
 /*
 ******************************************************************************
 **
-
-**  File        : LinkerScript.ld
+**  File        : stm32h723vgtx_flash_custom.ld
 **
-**  Author		: STM32CubeMX
+**  Abstract    : Custom linker script for STM32H723VGTx series
+**                Modified to place heap in AXI SRAM for DMA compatibility.
 **
-**  Abstract    : Linker script for STM32H723VGTx series
-**                1024Kbytes FLASH and 368Kbytes RAM
+**                IMPORTANT: STM32H7 DMA1/DMA2 cannot access DTCM RAM (0x20000000).
+**                The heap must be in AXI SRAM (0x24000000) for DMA transfers to work.
 **
-**                Set heap size, stack size and stack location according
-**                to application requirements.
-**
-**                Set memory bank area and size if external memory is used.
-**
-**  Target      : STMicroelectronics STM32
-**
-**  Distribution: The file is distributed “as is,” without any warranty
-**                of any kind.
-**
-*****************************************************************************
-** @attention
-**
-** <h2><center>&copy; COPYRIGHT(c) 2019 STMicroelectronics</center></h2>
-**
-** Redistribution and use in source and binary forms, with or without modification,
-** are permitted provided that the following conditions are met:
-**   1. Redistributions of source code must retain the above copyright notice,
-**      this list of conditions and the following disclaimer.
-**   2. Redistributions in binary form must reproduce the above copyright notice,
-**      this list of conditions and the following disclaimer in the documentation
-**      and/or other materials provided with the distribution.
-**   3. Neither the name of STMicroelectronics nor the names of its contributors
-**      may be used to endorse or promote products derived from this software
-**      without specific prior written permission.
-**
-** THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-** AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-** IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-** DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-** FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-** DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-** SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-** CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-** OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-** OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+**  Based on    : STM32CubeMX generated LinkerScript.ld
 **
 *****************************************************************************
 */
@@ -53,20 +18,21 @@
 ENTRY(Reset_Handler)
 
 /* Highest address of the user mode stack */
-_estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);    /* end of RAM */
+_estack = ORIGIN(RAM) + LENGTH(RAM);    /* end of AXI SRAM - stack at top of DMA-accessible RAM */
+
 /* Generate a link error if heap and stack don't fit into RAM */
-_Min_Heap_Size = 0x200;      /* required amount of heap  */
-_Min_Stack_Size = 0x800; /* required amount of stack */
+_Min_Heap_Size = 0x4000;      /* 16KB heap for DMA buffers */
+_Min_Stack_Size = 0x1000;     /* 4KB stack */
 
 /* Specify the memory areas */
 MEMORY
 {
-DTCMRAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 128K
-RAM (xrw)      : ORIGIN = 0x24000000, LENGTH = 128K
-RAM_D2 (xrw)      : ORIGIN = 0x30000000, LENGTH = 32K
-RAM_D3 (xrw)      : ORIGIN = 0x38000000, LENGTH = 16K
-ITCMRAM (xrw)      : ORIGIN = 0x00000000, LENGTH = 64K
-FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 1024K
+  DTCMRAM (xrw)   : ORIGIN = 0x20000000, LENGTH = 128K   /* Fast RAM, but NOT DMA accessible */
+  RAM (xrw)       : ORIGIN = 0x24000000, LENGTH = 128K   /* AXI SRAM - DMA accessible */
+  RAM_D2 (xrw)    : ORIGIN = 0x30000000, LENGTH = 32K    /* SRAM1/SRAM2 - DMA accessible */
+  RAM_D3 (xrw)    : ORIGIN = 0x38000000, LENGTH = 16K    /* SRAM4 - DMA accessible */
+  ITCMRAM (xrw)   : ORIGIN = 0x00000000, LENGTH = 64K    /* Instruction TCM */
+  FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 1024K
 }
 
 /* Define output sections */
@@ -113,12 +79,13 @@ SECTIONS
     __exidx_end = .;
   } >FLASH
 
-  .preinit_array     :
+  .preinit_array :
   {
     PROVIDE_HIDDEN (__preinit_array_start = .);
     KEEP (*(.preinit_array*))
     PROVIDE_HIDDEN (__preinit_array_end = .);
   } >FLASH
+
   .init_array :
   {
     PROVIDE_HIDDEN (__init_array_start = .);
@@ -126,6 +93,7 @@ SECTIONS
     KEEP (*(.init_array*))
     PROVIDE_HIDDEN (__init_array_end = .);
   } >FLASH
+
   .fini_array :
   {
     PROVIDE_HIDDEN (__fini_array_start = .);
@@ -138,7 +106,7 @@ SECTIONS
   _sidata = LOADADDR(.data);
 
   /* Initialized data sections goes into RAM, load LMA copy after code */
-  .data : 
+  .data :
   {
     . = ALIGN(4);
     _sdata = .;        /* create a global symbol at data start */
@@ -147,14 +115,13 @@ SECTIONS
 
     . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */
-  } >DTCMRAM AT> FLASH
+  } >RAM AT> FLASH
 
-  
   /* Uninitialized data section */
   . = ALIGN(4);
   .bss :
   {
-    /* This is used by the startup in order to initialize the .bss secion */
+    /* This is used by the startup in order to initialize the .bss section */
     _sbss = .;         /* define a global symbol at bss start */
     __bss_start__ = _sbss;
     *(.bss)
@@ -164,11 +131,10 @@ SECTIONS
     . = ALIGN(4);
     _ebss = .;         /* define a global symbol at bss end */
     __bss_end__ = _ebss;
-  } >DTCMRAM
+  } >RAM
 
   /* User_heap_stack section, used to check that there is enough RAM left */
-  /* NOTE: This CubeMX-generated file is NOT used by CMake build! */
-  /* CMake uses cmake/stm32h723vgtx_flash_custom.ld instead */
+  /* CRITICAL: Must be in DMA-accessible RAM (AXI SRAM) for STM32H7 */
   ._user_heap_stack :
   {
     . = ALIGN(8);
@@ -177,9 +143,7 @@ SECTIONS
     . = . + _Min_Heap_Size;
     . = . + _Min_Stack_Size;
     . = ALIGN(8);
-  } >DTCMRAM
-
-  
+  } >RAM
 
   /* Remove information from the standard libraries */
   /DISCARD/ :
@@ -189,6 +153,5 @@ SECTIONS
     libgcc.a ( * )
   }
 
+  .ARM.attributes 0 : { *(.ARM.attributes) }
 }
-
-

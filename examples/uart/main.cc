@@ -22,7 +22,6 @@
 
 #include <memory>
 
-#include "bsp_print.h"
 #include "bsp_uart.h"
 #include "cmsis_os.h"
 
@@ -57,21 +56,22 @@ class CustomUART : public bsp::UART {
   void RxCompleteCallback() override final { osThreadFlagsSet(defaultTaskHandle, RX_SIGNAL); }
 };
 
+extern "C" {
+
 void RM_RTOS_Default_Task(const void* argument) {
   UNUSED(argument);
 
   uint32_t length;
   uint8_t* data;
 
-  auto uart = std::make_unique<CustomUART>(&UART_HANDLE);  // see cmake for which uart
+  auto uart = std::make_unique<CustomUART>(&UART_HANDLE);
   uart->SetupRx(50);
   uart->SetupTx(50);
 
   while (true) {
     /* wait until rx data is available */
     uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
-    if (flags & RX_SIGNAL) {  // unnecessary check
-      /* time the non-blocking rx / tx calls (should be <= 1 osTick) */
+    if (flags & RX_SIGNAL) {
       length = uart->Read(&data);
       uart->Write(data, length);
       uart->Write(data, length);
@@ -79,3 +79,5 @@ void RM_RTOS_Default_Task(const void* argument) {
     }
   }
 }
+
+}  // extern "C"

@@ -281,4 +281,4 @@ void UART::RxCompleteCallback() {}
 } /* namespace bsp */
 
 /* overwrite the weak function defined in board specific usart.c to handle IRQ requests */
-void RM_UART_IRQHandler(UART_HandleTypeDef* huart) { bsp::RxCompleteCallbackWrapper(huart); }
+extern "C" void RM_UART_IRQHandler(UART_HandleTypeDef* huart) { bsp::RxCompleteCallbackWrapper(huart); }

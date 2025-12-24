@@ -53,7 +53,14 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+void RM_RTOS_Init(void);
+void RM_RTOS_Mutexes_Init(void);
+void RM_RTOS_Semaphores_Init(void);
+void RM_RTOS_Timers_Init(void);
+void RM_RTOS_Queues_Init(void);
+void RM_RTOS_Threads_Init(void);
+void RM_RTOS_Ready(void);
+void RM_RTOS_Default_Task(const void *argument);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

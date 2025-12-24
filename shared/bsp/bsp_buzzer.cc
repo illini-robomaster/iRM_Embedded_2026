@@ -28,9 +28,17 @@ Buzzer::Buzzer(TIM_HandleTypeDef* htim, uint32_t channel, uint32_t clock_freq)
 }
 
 void Buzzer::SingTone(const BuzzerNote& note) {
-  if (note != BuzzerNote::Finish) {
-    pwm_.SetFrequency(static_cast<uint32_t>(note));
-    pwm_.SetPulseWidth(1000000 / static_cast<uint32_t>(note) / 2);
+  if (note == BuzzerNote::Finish) {
+    return;
+  }
+
+  uint32_t freq = static_cast<uint32_t>(note);
+  if (freq == 0) {
+    // Silent: just set pulse width to 0 (no output)
+    pwm_.SetPulseWidth(0);
+  } else {
+    pwm_.SetFrequency(freq);
+    pwm_.SetPulseWidth(1000000 / freq / 2);  // 50% duty cycle
   }
 }
 

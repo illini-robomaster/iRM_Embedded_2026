@@ -117,10 +117,7 @@ int main(void)
   MX_TIM6_Init();
   MX_UART5_Init();
   /* USER CODE BEGIN 2 */
-  // Note: UART7 baud rate is 115200 (default from CubeMX)
-  // For debug output, we can optionally change it here
-  // huart7.Init.BaudRate = 921600;
-  // HAL_UART_Init(&huart7);
+
   /* USER CODE END 2 */
 
   /* Init scheduler */

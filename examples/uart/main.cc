@@ -20,6 +20,7 @@
 
 #include "main.h"
 
+#include <cstring>
 #include <memory>
 
 #include "bsp_uart.h"
@@ -56,8 +57,6 @@ class CustomUART : public bsp::UART {
   void RxCompleteCallback() override final { osThreadFlagsSet(defaultTaskHandle, RX_SIGNAL); }
 };
 
-extern "C" {
-
 void RM_RTOS_Default_Task(const void* argument) {
   UNUSED(argument);
 
@@ -67,6 +66,11 @@ void RM_RTOS_Default_Task(const void* argument) {
   auto uart = std::make_unique<CustomUART>(&UART_HANDLE);
   uart->SetupRx(50);
   uart->SetupTx(50);
+
+  // Debug: send a startup message using HAL directly
+  const char* startup_msg = "UART Example Started\r\n";
+
+  uart->Write((const uint8_t*)startup_msg, strlen(startup_msg));
 
   while (true) {
     /* wait until rx data is available */
@@ -79,5 +83,3 @@ void RM_RTOS_Default_Task(const void* argument) {
     }
   }
 }
-
-}  // extern "C"

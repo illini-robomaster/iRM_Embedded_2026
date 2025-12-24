@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------- #
 #                                                                        #
-#  Copyright (C) 2022                                                    #
+#  Copyright (C) 2024                                                    #
 #  Illini RoboMaster @ University of Illinois at Urbana-Champaign.       #
 #                                                                        #
 #  This program is free software: you can redistribute it and/or modify  #
@@ -18,37 +18,9 @@
 #                                                                        #
 # ---------------------------------------------------------------------- #
 
-add_subdirectory(buzzer)
-add_subdirectory(chassis)
-add_subdirectory(dbus)
-add_subdirectory(eigen)
-add_subdirectory(gimbal)
-add_subdirectory(imu)
-add_subdirectory(led)
-add_subdirectory(minipc)
-add_subdirectory(motor)
-add_subdirectory(sdio)
-add_subdirectory(turret)
-add_subdirectory(uart)
-add_subdirectory(usb)
-add_subdirectory(shooter)
-add_subdirectory(steering)
-add_subdirectory(rtos)
-add_subdirectory(laser)
-add_subdirectory(ultrasonic)
-add_subdirectory(referee)
-add_subdirectory(protocol)
-add_subdirectory(relay)
-add_subdirectory(oled)
-add_subdirectory(lidar07)
-add_subdirectory(fortress)
-add_subdirectory(supercap)
-add_subdirectory(sensor)
-add_subdirectory(can)
-add_subdirectory(can_bridge)
-add_subdirectory(stepper)
-add_subdirectory(hero)
-add_subdirectory(autoaim)
-add_subdirectory(sbus)
-add_subdirectory(unitree_motor)
-add_subdirectory(brt_encoder)
+project(example_can ASM C CXX)
+
+# DM_MC_02 CAN example using FDCAN in Classic CAN mode (1 Mbps)
+irm_add_arm_executable(${PROJECT_NAME}_mc02
+    TARGET DM_MC_02
+    SOURCES main_mc02.cc)

@@ -80,10 +80,91 @@ After CubeMX regeneration:
 - [ ] Verify USB LPM is disabled (if applicable)
 - [ ] Rebuild and test
 
+## FDCAN Configuration for DJI Motors
+
+### Overview
+
+DM-MC-02 uses FDCAN instead of classic CAN. The BSP provides an abstraction layer:
+
+- `BOARD_HAS_FDCAN` macro defined in CMakeLists.txt
+- `bsp_can_bridge.h` provides `using CAN = FDCAN;` alias
+- Motor library works transparently with both CAN and FDCAN
+
+### CubeMX FDCAN Setup (Required for 1Mbps)
+
+The FDCAN clock source is PLL1_Q = **40 MHz** (with current clock config).
+
+**In CubeMX → Connectivity → FDCAN1/2/3:**
+
+1. **Mode**: `Classic CAN`
+2. **Frame Format**: `Classic`
+3. **Mode**: `Normal`
+4. **Auto Retransmission**: `Disable`
+5. **Bit Timing Parameters** (for 1Mbps, 80% sample point):
+   - **Nominal Prescaler**: `4`
+   - **Nominal Sync Jump Width**: `1`
+   - **Nominal Time Seg1**: `7`
+   - **Nominal Time Seg2**: `2`
+6. **Message RAM**:
+   - **Std Filters Nbr**: `1`
+   - **Rx Fifo0 Elmts Nbr**: `32`
+   - **Tx Fifo Queue Elmts Nbr**: `32`
+
+**Verification Formula**:
+
+```
+Baud Rate = FDCAN_CLK / (Prescaler × (1 + TimeSeg1 + TimeSeg2))
+1,000,000 = 40,000,000 / (4 × (1 + 7 + 2))
+1,000,000 = 40,000,000 / 40 ✓
+```
+
+### NVIC Configuration
+
+Enable FDCAN interrupts (usually auto-enabled by CubeMX):
+
+- FDCAN1_IT0_IRQn, FDCAN1_IT1_IRQn
+- FDCAN2_IT0_IRQn, FDCAN2_IT1_IRQn
+- FDCAN3_IT0_IRQn, FDCAN3_IT1_IRQn
+
+Priority should be ≥ 5 for FreeRTOS compatibility.
+
+### GPIO Mapping (DM-MC-02)
+
+| FDCAN | TX Pin | RX Pin | Alternate Function |
+|-------|--------|--------|-------------------|
+| FDCAN1 | PD1 | PD0 | AF9 |
+| FDCAN2 | PB6 | PB5 | AF9 |
+| FDCAN3 | PD13 | PD12 | AF5 |
+
+### Usage Example
+
+```cpp
+#include "bsp_can_bridge.h"  // Provides bsp::CAN which maps to FDCAN
+#include "motor.h"
+
+// Create FDCAN instance (same API as CAN)
+bsp::CAN* can1 = new bsp::CAN(&hfdcan1, 0);  // filter_id = 0
+
+// Create motors (same API)
+control::Motor3508* motor = new control::Motor3508(can1, 0x201);
+```
+
+### Current Status (NEEDS FIX)
+
+⚠️ **The current CubeMX configuration has incorrect baud rate parameters!**
+
+Current values produce incorrect baud rate:
+
+- Prescaler = 24, TimeSeg1 = 2, TimeSeg2 = 1
+- Baud = 40MHz / (24 × 4) = 416.67 kbps ❌
+
+**Action Required**: Update FDCAN parameters in CubeMX as described above.
+
 ## Known Issues
 
 1. `bsp_print.cc` depends on USB, currently using stub implementation
 2. Some BSP modules not ported: IMU, Laser, SDIO, Ultrasonic
+3. **FDCAN baud rate needs correction** (see FDCAN Configuration section)
 
 ## Troubleshooting
 

@@ -445,8 +445,15 @@ void SystemCoreClockUpdate (void)
   */
 void ExitRun0Mode(void)
 {
-  /* Configure voltage scaling to VOS1 (Scale 1) for maximum performance (550 MHz) */
-  /* Set VOS bits to 11b for VOS1 (PWR_D3CR_VOS_1 | PWR_D3CR_VOS_0) */
+  /* Enable SYSCFG clock first - for STM32H723 */
+  RCC->APB4ENR |= RCC_APB4ENR_SYSCFGEN;
+  __DSB();
+  
+  /* Configure supply mode (LDO) - PWR clock is always enabled on H7 */
+  PWR->CR3 |= PWR_CR3_LDOEN;
+  while((PWR->CSR1 & PWR_CSR1_ACTVOSRDY) == 0U) {}
+  
+  /* Configure voltage scaling to VOS1 (Scale 1) for maximum performance */
   PWR->D3CR |= (PWR_D3CR_VOS_0 | PWR_D3CR_VOS_1);
   
   /* Wait until voltage level is ready by polling VOSRDY flag in D3CR */

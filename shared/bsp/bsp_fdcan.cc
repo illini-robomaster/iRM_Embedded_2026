@@ -20,8 +20,17 @@
 
 #include "bsp_fdcan.h"
 
+#include <cstring>
+
 #include "bsp_error_handler.h"
 #include "cmsis_os.h"
+
+// Debug: volatile variables accessible for debugging
+volatile uint32_t fdcan_debug_fill_level = 0;
+volatile uint32_t fdcan_debug_hal_status = 0;
+volatile uint32_t fdcan_debug_identifier = 0;
+volatile uint32_t fdcan_debug_dlc = 0;
+volatile uint8_t fdcan_debug_data[8] = {0};
 
 namespace bsp {
 
@@ -98,13 +107,18 @@ namespace bsp {
         if (length > 8 || length == 0)
             return -1;
 
-        // Map length to DLC code
-        uint32_t dlc_code;
-        if (length <= 8) {
-            dlc_code = length << 16;  // For classic CAN, DLC is just the length
-        } else {
-            return -1;
-        }
+        // Map length to FDCAN DLC constant
+        static const uint32_t dlc_table[9] = {
+            FDCAN_DLC_BYTES_0,
+            FDCAN_DLC_BYTES_1,
+            FDCAN_DLC_BYTES_2,
+            FDCAN_DLC_BYTES_3,
+            FDCAN_DLC_BYTES_4,
+            FDCAN_DLC_BYTES_5,
+            FDCAN_DLC_BYTES_6,
+            FDCAN_DLC_BYTES_7,
+            FDCAN_DLC_BYTES_8};
+        uint32_t dlc_code = dlc_table[length];
 
         FDCAN_TxHeaderTypeDef header = {
             .Identifier = id,
@@ -126,10 +140,26 @@ namespace bsp {
 
     void FDCAN::RxCallback() {
         FDCAN_RxHeaderTypeDef header;
+        memset(&header, 0, sizeof(header));
         uint8_t data[MAX_FDCAN_DATA_SIZE];
-        
-        if (HAL_FDCAN_GetRxMessage(hfdcan_, FDCAN_RX_FIFO0, &header, data) != HAL_OK)
-            return;
+        memset(data, 0xAA, sizeof(data));  // Initialize with 0xAA pattern
+
+        // Check if there's actually a message in FIFO0
+        uint32_t fill_level = HAL_FDCAN_GetRxFifoFillLevel(hfdcan_, FDCAN_RX_FIFO0);
+        fdcan_debug_fill_level = fill_level;
+        if (fill_level == 0)
+          return;
+
+        HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(hfdcan_, FDCAN_RX_FIFO0, &header, data);
+        fdcan_debug_hal_status = status;
+        fdcan_debug_identifier = header.Identifier;
+        fdcan_debug_dlc = header.DataLength;
+        for (int i = 0; i < 8; i++) {
+          fdcan_debug_data[i] = data[i];
+        }
+
+        if (status != HAL_OK)
+          return;
             
         uint16_t callback_id = header.Identifier;
         const auto it = id_to_index_.find(callback_id);

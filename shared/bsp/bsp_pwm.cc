@@ -61,7 +61,11 @@ void PWM::SetFrequency(uint32_t output_freq) {
 
 void PWM::SetPulseWidth(uint32_t pulse_width) {
   this->pulse_width_ = pulse_width;
-  uint32_t compare = pulse_width > 0 ? clock_freq_ * pulse_width_ / 1000000 - 1 : 0;
+  // Use 64-bit arithmetic to avoid overflow
+  // pulse_width is in microseconds, clock_freq_ is in Hz
+  uint32_t compare = pulse_width > 0
+                         ? static_cast<uint32_t>((uint64_t)clock_freq_ * pulse_width_ / 1000000) - 1
+                         : 0;
   __HAL_TIM_SET_COMPARE(htim_, channel_, compare);
 }
 

@@ -836,9 +836,24 @@ Motor4310::Motor4310(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t mode)
   }
 }
 
-Motor4310::Motor4310(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t mode, float p_max) : Motor4310(can, rx_id, tx_id, mode) {
+Motor4310::Motor4310(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t mode, float p_max)
+    : Motor4310(can, rx_id, tx_id, mode) {
+  can->RegisterRxCallback(rx_id, can_motor_4310_callback, this);
   P_MAX = p_max;
   P_MIN = -p_max;
+}
+
+void Motor4310::MotorEnable() {
+  uint8_t data[8] = {0};
+  data[0] = 0xff;
+  data[1] = 0xff;
+  data[2] = 0xff;
+  data[3] = 0xff;
+  data[4] = 0xff;
+  data[5] = 0xff;
+  data[6] = 0xff;
+  data[7] = 0xfc;
+  this->can_->Transmit(this->tx_id_actual_, data, 8);
 }
 
     void Motor4310::MotorEnable() {
@@ -955,9 +970,9 @@ Motor4310::Motor4310(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t mode,
       raw_mosTemp_ = data[6];
       raw_motorTemp_ = data[7];
 
-      theta_ = wrap<float>(uint_to_float(raw_pos_, P_MIN, P_MAX, 16), P_MIN, P_MAX);
-      omega_ = uint_to_float(raw_vel_, V_MIN, V_MAX, 12);
-      torque_ = uint_to_float(raw_torque_, T_MIN, T_MAX, 12);
+  theta_ = wrap<float>(uint_to_float(raw_pos_, P_MIN, P_MAX, 16), P_MIN, P_MAX);
+  omega_ = uint_to_float(raw_vel_, V_MIN, V_MAX, 12);
+  torque_ = uint_to_float(raw_torque_, T_MIN, T_MAX, 12);
 
       connection_flag_ = true;
     }

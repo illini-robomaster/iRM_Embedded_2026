@@ -878,131 +878,131 @@ class Motor4310 {
 
   Motor4310(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id, mode_t mode, float P_MAX);
 
-        /* implements data update callback */
-        void UpdateData(const uint8_t data[]);
+  /* implements data update callback */
+  void UpdateData(const uint8_t data[]);
 
-        /* enable m4310; MUST be called after motor is powered up, otherwise SetOutput commands are ignored */
-        void MotorEnable();
-        /* disable m4310 */
-        void MotorDisable();
+  /* enable m4310; MUST be called after motor is powered up, otherwise SetOutput commands are ignored */
+  void MotorEnable();
+  /* disable m4310 */
+  void MotorDisable();
 
-        /** sets current motor position as zero position (when motor is powered). M4310 remembers this position
-         * when powered off. */
-        void SetZeroPos();
+  /** sets current motor position as zero position (when motor is powered). M4310 remembers this position
+   * when powered off. */
+  void SetZeroPos();
 
-        /**
-         * implements transmit output specifically for 4310
-         * @param motor m4310 motor object
-         * @param mode operation modes:
-         *                0: MIT
-         *                1: position-velocity
-         *                2: velocity
-         */
-        static void TransmitOutput(control::Motor4310* motors[], uint8_t num_motors);
+  /**
+   * implements transmit output specifically for 4310
+   * @param motor m4310 motor object
+   * @param mode operation modes:
+   *                0: MIT
+   *                1: position-velocity
+   *                2: velocity
+   */
+  static void TransmitOutput(control::Motor4310* motors[], uint8_t num_motors);
 
-        /* implements data printout */
-        void PrintData();
+  /* implements data printout */
+  void PrintData();
 
-        /**
-         * Sets output parameters for m4310 using the MIT mode
-         *
-         * Several control modes can be derived from the MIT mode:
-         * 1. Velocity mode:
-         *    Rotates the motor at a constant velocity by setting kp to zero, kd to a non-zero
-         *    value, and velocity to the target angular velocity
-         *    e.g. motor->SetOutput(0, 3, 0, 1, 0);
-         * 2. Position mode:
-         *    Rotates the motor to a target position by setting position to a relative target
-         *    position. Note: kd must be set to a NON-ZERO value to avoid oscillation
-         *    e.g. motor->SetOutput(2*PI, 0, 0.4, 0.05, 0);
-         * 3. Torque mode:
-         *    Rotates the motor at a given torque by setting torque to a desired value. kp and kd
-         *    should be set to zero. Note: under no load, a small torque
-         *    e.g. motor->SetOutput(0, 0, 0, 0, 1);
-         *
-         * @param position relative target position in radian (can exceed 2*PI)
-         * @param velocity target angular velocity (rad/s)
-         * @param kp p gain (N/rad)
-         * @param kd d gain (N*s/rad)
-         * @param torque target torque (Nm)
-         */
-        void SetOutput(float position, float velocity, float kp, float kd, float torque);
+  /**
+   * Sets output parameters for m4310 using the MIT mode
+   *
+   * Several control modes can be derived from the MIT mode:
+   * 1. Velocity mode:
+   *    Rotates the motor at a constant velocity by setting kp to zero, kd to a non-zero
+   *    value, and velocity to the target angular velocity
+   *    e.g. motor->SetOutput(0, 3, 0, 1, 0);
+   * 2. Position mode:
+   *    Rotates the motor to a target position by setting position to a relative target
+   *    position. Note: kd must be set to a NON-ZERO value to avoid oscillation
+   *    e.g. motor->SetOutput(2*PI, 0, 0.4, 0.05, 0);
+   * 3. Torque mode:
+   *    Rotates the motor at a given torque by setting torque to a desired value. kp and kd
+   *    should be set to zero. Note: under no load, a small torque
+   *    e.g. motor->SetOutput(0, 0, 0, 0, 1);
+   *
+   * @param position relative target position in radian (can exceed 2*PI)
+   * @param velocity target angular velocity (rad/s)
+   * @param kp p gain (N/rad)
+   * @param kd d gain (N*s/rad)
+   * @param torque target torque (Nm)
+   */
+  void SetOutput(float position, float velocity, float kp, float kd, float torque);
 
-        /**
-         * Sets output parameters for m4310 using position-velocity mode
-         * e.g. motor->SetOutput(2*PI, 1);
-         *
-         * Note: oscillations can be alleviated by tuning the acceleration/deceleration parameters
-         * through the DAMIAO helper tool. The damping factor needs to be a non-zero positive number
-         *
-         * @param position relative target position in radian (can exceed 2*PI)
-         * @param velocity maximum absolute angular velocity (rad/s)
-         */
-        void SetOutput(float position, float velocity);
+  /**
+   * Sets output parameters for m4310 using position-velocity mode
+   * e.g. motor->SetOutput(2*PI, 1);
+   *
+   * Note: oscillations can be alleviated by tuning the acceleration/deceleration parameters
+   * through the DAMIAO helper tool. The damping factor needs to be a non-zero positive number
+   *
+   * @param position relative target position in radian (can exceed 2*PI)
+   * @param velocity maximum absolute angular velocity (rad/s)
+   */
+  void SetOutput(float position, float velocity);
 
-        /**
-         * Sets output parameters for m4310 using velocity mode
-         *
-         * e.g. motor->SetOutput(1);
-         * @param velocity target angular velocity (rad/s)
-         */
-        void SetOutput(float velocity);
+  /**
+   * Sets output parameters for m4310 using velocity mode
+   *
+   * e.g. motor->SetOutput(1);
+   * @param velocity target angular velocity (rad/s)
+   */
+  void SetOutput(float velocity);
 
-        /**
-         * @brief get motor angle, in [rad]
-         *
-         * @return radian angle
-         */
-        float GetTheta() const;
-        /**
-         * @brief get motor angular velocity, in [rad / s]
-         * @return radian angular velocity
-         */
-        float GetOmega() const;
+  /**
+   * @brief get motor angle, in [rad]
+   *
+   * @return radian angle
+   */
+  float GetTheta() const;
+  /**
+   * @brief get motor angular velocity, in [rad / s]
+   * @return radian angular velocity
+   */
+  float GetOmega() const;
 
-        /**
-         * @brief get motor torque, in [Nm]
-         * @return motor torque
-         */
-        float GetTorque() const;
+  /**
+   * @brief get motor torque, in [Nm]
+   * @return motor torque
+   */
+  float GetTorque() const;
 
-        mode_t GetMode() const;
+  mode_t GetMode() const;
 
-        /**
-         * @brief get motor target angle, in [rad]
-         * @return motor target angle
-         */
-        float GetRelativeTarget() const;
+  /**
+   * @brief get motor target angle, in [rad]
+   * @return motor target angle
+   */
+  float GetRelativeTarget() const;
 
-        /**
-         * @brief Set motor target position, in [rad]
-         */
-        void SetRelativeTarget(float target);
+  /**
+   * @brief Set motor target position, in [rad]
+   */
+  void SetRelativeTarget(float target);
 
-        volatile bool connection_flag_ = false;
+  volatile bool connection_flag_ = false;
 
-    private:
-        bsp::CAN* can_;
-        uint16_t rx_id_;
-        uint16_t tx_id_;
-        uint16_t tx_id_actual_;  // actual CAN id
+ private:
+  bsp::CAN* can_;
+  uint16_t rx_id_;
+  uint16_t tx_id_;
+  uint16_t tx_id_actual_;  // actual CAN id
 
-        volatile mode_t mode_;           // current motor mode
-        volatile float kp_set_ = 0;      // defined kp value
-        volatile float kd_set_ = 0;      // defined kd value
-        volatile float vel_set_ = 0;     // defined velocity
-        volatile float pos_set_ = 0;     // defined position
-        volatile float torque_set_ = 0;  // defined torque
+  volatile mode_t mode_;           // current motor mode
+  volatile float kp_set_ = 0;      // defined kp value
+  volatile float kd_set_ = 0;      // defined kd value
+  volatile float vel_set_ = 0;     // defined velocity
+  volatile float pos_set_ = 0;     // defined position
+  volatile float torque_set_ = 0;  // defined torque
 
-        volatile int16_t raw_pos_ = 0;        // actual position
-        volatile int16_t raw_vel_ = 0;        // actual velocity
-        volatile int16_t raw_torque_ = 0;     // actual torque
-        volatile int16_t raw_motorTemp_ = 0;  // motor temp
-        volatile int16_t raw_mosTemp_ = 0;    // MOS temp
-        volatile float theta_ = 0;            // actual angular position
-        volatile float omega_ = 0;            // actual angular velocity
-        volatile float torque_ = 0;           // actual torque
-        float relative_target_ = 0;           // target position
+  volatile int16_t raw_pos_ = 0;        // actual position
+  volatile int16_t raw_vel_ = 0;        // actual velocity
+  volatile int16_t raw_torque_ = 0;     // actual torque
+  volatile int16_t raw_motorTemp_ = 0;  // motor temp
+  volatile int16_t raw_mosTemp_ = 0;    // MOS temp
+  volatile float theta_ = 0;            // actual angular position
+  volatile float omega_ = 0;            // actual angular velocity
+  volatile float torque_ = 0;           // actual torque
+  float relative_target_ = 0;           // target position
 
   // P control
   constexpr static float KP_MIN = 0;

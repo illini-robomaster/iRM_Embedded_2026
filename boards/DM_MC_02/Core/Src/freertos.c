@@ -52,7 +52,7 @@
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -76,6 +76,7 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 /* Hook prototypes */
 void configureTimerForRunTimeStats(void);
 unsigned long getRunTimeCounterValue(void);
+void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName);
 
 /* USER CODE BEGIN 1 */
 /* Functions needed when configGENERATE_RUN_TIME_STATS is on */
@@ -88,7 +89,26 @@ __weak unsigned long getRunTimeCounterValue(void)
 {
   return __HAL_TIM_GET_COUNTER(&htim6);
 }
+
+/* Stack overflow hook - called when stack overflow is detected */
+void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
+{
+  /* This function will be called if a task overflows its stack.
+   * pxTask and pcTaskName contain the task handle and name.
+   * Put a breakpoint here to debug stack overflow issues. */
+  (void)xTask;
+  (void)pcTaskName;
+  
+  /* Blink LED or halt for debugging */
+  while(1)
+  {
+    /* Stack overflow detected - halt here for debugging */
+  }
+}
 /* USER CODE END 1 */
+
+/* USER CODE BEGIN 4 */
+/* USER CODE END 4 */
 
 /**
   * @brief  FreeRTOS initialization

@@ -48,9 +48,22 @@ PWM::PWM(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq, uint32_t
   SetPulseWidth(pulse_width);
 }
 
-void PWM::Start() { HAL_TIM_PWM_Start(htim_, channel_); }
+void PWM::Start() {
+  HAL_TIM_PWM_Start(htim_, channel_);
+  // For advanced timers (TIM1, TIM8, TIM15, TIM16, TIM17), enable Main Output (MOE)
+  // This is required for the PWM signal to actually appear on the pin
+  if (IS_TIM_BREAK_INSTANCE(htim_->Instance)) {
+    __HAL_TIM_MOE_ENABLE(htim_);
+  }
+}
 
-void PWM::Stop() { HAL_TIM_PWM_Stop(htim_, channel_); }
+void PWM::Stop() {
+  HAL_TIM_PWM_Stop(htim_, channel_);
+  // Disable Main Output for advanced timers
+  if (IS_TIM_BREAK_INSTANCE(htim_->Instance)) {
+    __HAL_TIM_MOE_DISABLE(htim_);
+  }
+}
 
 void PWM::SetFrequency(uint32_t output_freq) {
   this->output_freq_ = output_freq;

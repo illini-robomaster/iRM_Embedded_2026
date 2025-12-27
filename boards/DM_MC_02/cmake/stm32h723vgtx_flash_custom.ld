@@ -133,6 +133,19 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
+  /* D2 SRAM section - DMA accessible memory for UART/SPI DMA transfers */
+  /* DMA1/DMA2 can access both AXI SRAM (0x24000000) and D2 SRAM (0x30000000) */
+  /* Use this section for buffers that MUST be in D2 domain */
+  .RAM_D2 (NOLOAD) :
+  {
+    . = ALIGN(4);
+    _sram_d2 = .;
+    *(.RAM_D2)
+    *(.RAM_D2*)
+    . = ALIGN(4);
+    _eram_d2 = .;
+  } >RAM_D2
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   /* CRITICAL: Must be in DMA-accessible RAM (AXI SRAM) for STM32H7 */
   ._user_heap_stack :

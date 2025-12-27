@@ -78,7 +78,10 @@ namespace bsp {
 
     FDCAN::FDCAN(FDCAN_HandleTypeDef* hfdcan, uint32_t filter_id): hfdcan_(hfdcan) {
         RM_ASSERT_FALSE(HandleExists(hfdcan), "Repeated FDCAN initialization");
-        
+        // Friendly reminder: filter_id should be unique for each FDCAN instance.
+        // For STM32 FDCAN, filter indices typically range from 0 to 27 for standard IDs.
+        // Make sure not to reuse the same filter_id across different FDCAN instances. Of course, right now we only use FDCAN as a classic CAN bus.
+
         ConfigureFilter(filter_id);
         
         // Activate FIFO 0 new message notification

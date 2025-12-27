@@ -78,8 +78,10 @@ void RM_RTOS_Default_Task(const void *argument);
 #define DCMI_PWDN_GPIO_Port GPIOC
 #define INT1_ACCEL_Pin GPIO_PIN_10
 #define INT1_ACCEL_GPIO_Port GPIOE
+#define INT1_ACCEL_EXTI_IRQn EXTI15_10_IRQn
 #define INT1_GYRO_Pin GPIO_PIN_12
 #define INT1_GYRO_GPIO_Port GPIOE
+#define INT1_GYRO_EXTI_IRQn EXTI15_10_IRQn
 #define LCD_CS_Pin GPIO_PIN_15
 #define LCD_CS_GPIO_Port GPIOE
 #define LCD_BLK_Pin GPIO_PIN_10

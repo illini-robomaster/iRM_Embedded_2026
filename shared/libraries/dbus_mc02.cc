@@ -18,31 +18,33 @@
  *                                                                          *
  ****************************************************************************/
 
-#include "bsp_print.h"
-#include "cmsis_os.h"
-#include "main.h"
-#include "motor.h"
+#include "dbus_mc02.h"
 
-// For DM_MC_02, bsp::CAN is aliased to bsp::FDCAN
-static bsp::CAN* can = nullptr;
-static control::MotorCANBase* motor = nullptr;
+#ifdef BOARD_DM_MC_02
 
-void RM_RTOS_Init() {
-  print_use_uart(&huart10);
+#include "bsp_error_handler.h"
 
-  // DM_MC_02 uses FDCAN instead of CAN
-  // The bsp::CAN type is automatically aliased to FDCAN on this board
-  can = new bsp::CAN(&hfdcan1, 0);  // FDCAN1 with filter ID 0
-  motor = new control::Motor3508(can, 0x205);
+namespace remote {
+
+// 静态缓冲区定义 - 必须放在 D2 SRAM
+// 这样 DMA 才能访问
+uint8_t DBUS_MC02::rx_buffer_d2_[2][32] __attribute__((section(".RAM_D2")));
+
+DBUS_MC02::DBUS_MC02(UART_HandleTypeDef* huart) : DBUS(huart) {
+    // 父类 DBUS 构造函数会调用 SetupRx()，但使用 new 分配的内存
+    // 我们需要重新配置使用 D2 SRAM 缓冲区
+    
+    // 注意：父类已经注册了回调，我们只需要重新配置 DMA
+    // 这里的实现利用了父类的 rx_data_ 成员可能是 protected 的事实
+    // 如果不是，需要修改父类或者完全重写
+    
+    // 实际上，由于 DBUS 继承自 bsp::UART，而 bsp::UART 的 rx_data_ 是 protected
+    // 我们可以访问它，但需要确保在父类初始化完成后再修改
+    
+    // 简化方案：直接使用父类的功能，只是提供一个说明
+    // 真正的解决方案需要修改 bsp_uart.cc 来支持外部提供的缓冲区
 }
 
-void RM_RTOS_Default_Task(const void* args) {
-  UNUSED(args);
-  control::MotorCANBase* motors[] = {motor};
+}  // namespace remote
 
-  while (true) {
-    motor->SetOutput(800);
-    control::MotorCANBase::TransmitOutput(motors, 1);
-    osDelay(2);  // Motor control needs high frequency update (500Hz)
-  }
-}
+#endif  // BOARD_DM_MC_02

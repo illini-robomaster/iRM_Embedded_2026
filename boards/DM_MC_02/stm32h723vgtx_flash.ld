@@ -166,6 +166,16 @@ SECTIONS
     __bss_end__ = _ebss;
   } >DTCMRAM
 
+  /* D2 SRAM section - DMA accessible memory for STM32H7 */
+  /* DMA1/DMA2 can only access D2 SRAM (0x30000000-0x30007FFF) */
+  .RAM_D2 (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.RAM_D2)
+    *(.RAM_D2*)
+    . = ALIGN(4);
+  } >RAM_D2
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   /* NOTE: This CubeMX-generated file is NOT used by CMake build! */
   /* CMake uses cmake/stm32h723vgtx_flash_custom.ld instead */

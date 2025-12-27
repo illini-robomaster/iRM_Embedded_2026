@@ -288,6 +288,9 @@ typedef struct {
   float z;
 } vec3f_t;
 
+// MPU6500 class is not supported on BOARD_DM_MC_02 (uses STM32F4-specific SPI callbacks)
+#ifndef BOARD_DM_MC_02
+
 class MPU6500 : public GPIT {
  public:
   /**
@@ -382,6 +385,8 @@ class IST8310 : public GPIT {
   uint16_t rst_pin_;
 };
 
+#endif  // !BOARD_DM_MC_02 - End of MPU6500 and IST8310
+
 typedef struct {
   uint8_t status;
   int16_t accel[3];
@@ -469,6 +474,9 @@ class BMI088 {
   void BMI088_gyro_read_single_reg(uint8_t reg, uint8_t* data);
   void BMI088_gyro_read_muli_reg(uint8_t reg, uint8_t* buf, uint8_t len);
 };
+
+// Accel_INT, Gyro_INT, IMU_typeC classes use STM32F4-specific DMA registers
+#ifndef BOARD_DM_MC_02
 
 class Accel_INT : public GPIT {
  public:
@@ -587,5 +595,7 @@ class IMU_typeC {
   float TempControl(float real_temp);
   void GetAngle(float q[4], float* yaw, float* pitch, float* roll);
 };
+
+#endif  // !BOARD_DM_MC_02 - End of IMU_typeC
 
 } /* namespace bsp */

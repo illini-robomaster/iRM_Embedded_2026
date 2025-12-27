@@ -311,37 +311,61 @@ void MotorPWMBase::SetOutput(int16_t val) {
 //==================================================================================================
 // PDI_HV Servo
 //==================================================================================================
-PDIHV::PDIHV(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq,
-                   uint32_t output_freq, uint32_t idle_throttle)
-    : MotorPWMBase(htim, channel, clock_freq, output_freq, idle_throttle) {
 
+/**
+ * @brief PDI-HV Servo Motor
+ *
+ * Pulse Width Range: 972 - 1947 µs
+ * Angle Range: -80° to +80° (160° total)
+ * Center Position: 1470 µs (0°)
+ */
+PDIHV::PDIHV(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq,
+             uint32_t output_freq, uint32_t idle_throttle)
+    : MotorPWMBase(htim, channel, clock_freq, output_freq, idle_throttle) {
 }
 
-void PDIHV::SetOutPutAngle(float degree) {
-        float slope = (2036.0-972.0) / 160.0;
-        int16_t val = int16_t (clip<float>(degree, -80, 80) * slope + 1470);
-        constexpr int16_t MIN_OUTPUT = 972;
-        constexpr int16_t MAX_OUTPUT = 1947;
-//        972 to 1947 for pulse width input u second
-//        -80 to 80 for angle input
+void PDIHV::SetOutputAngle(float degree) {
+  // Clamp angle to valid range
+  degree = clip<float>(degree, -80.0f, 80.0f);
 
-        this->SetOutput(clip<int16_t>(val, MIN_OUTPUT, MAX_OUTPUT));
-        this->SetOutput(val);
+  // Linear mapping: -80° -> 972µs, 0° -> 1470µs, +80° -> 1947µs (approximately)
+  // slope = (1947 - 972) / 160 = 6.09375
+  constexpr float SLOPE = (1947.0f - 972.0f) / 160.0f;
+  constexpr float CENTER_PULSE = 1470.0f;
+
+  int16_t pulse_width = static_cast<int16_t>(degree * SLOPE + CENTER_PULSE);
+  SetOutput(pulse_width);
 }
 
 void PDIHV::SetOutput(int16_t val) {
-  constexpr int16_t MIN_OUTPUT = 972;
-  constexpr int16_t MAX_OUTPUT = 1947;
-  MotorPWMBase::SetOutput(clip<int16_t>(val, MIN_OUTPUT, MAX_OUTPUT));
+  constexpr int16_t MIN_PULSE = 972;
+  constexpr int16_t MAX_PULSE = 1947;
+  // Directly set pulse width (not offset from idle_throttle)
+  output_ = clip<int16_t>(val, MIN_PULSE, MAX_PULSE);
+  pwm_.SetPulseWidth(output_);
 }
 //==================================================================================================
-// Motor2305
+// Motor2305 (DJI Snail ESC)
 //==================================================================================================
 
+/**
+ * @brief DJI Snail 2305 Motor (brushless ESC)
+ *
+ * Idle throttle: ~1100 µs (motor armed but not spinning)
+ * Throttle range: 0-700 µs offset from idle
+ * Full range: 1100 - 1800 µs
+ */
 void Motor2305::SetOutput(int16_t val) {
-  constexpr int16_t MIN_OUTPUT = 0;
-  constexpr int16_t MAX_OUTPUT = 700;
-  MotorPWMBase::SetOutput(clip<int16_t>(val, MIN_OUTPUT, MAX_OUTPUT));
+  constexpr int16_t MIN_OFFSET = 0;
+  constexpr int16_t MAX_OFFSET = 700;
+  MotorPWMBase::SetOutput(clip<int16_t>(val, MIN_OFFSET, MAX_OFFSET));
+}
+
+void Motor2305::SetThrottle(float percent) {
+  // Map 0-100% to 0-700 offset
+  percent = clip<float>(percent, 0.0f, 100.0f);
+  int16_t offset = static_cast<int16_t>(percent * 7.0f);  // 700/100 = 7
+  SetOutput(offset);
 }
 
 //==================================================================================================

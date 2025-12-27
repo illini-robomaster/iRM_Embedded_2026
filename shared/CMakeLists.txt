@@ -58,17 +58,13 @@ irm_add_board_specific_library(DM_MC_01_irm
 
 set(IRM_SOURCES_DM_MC_02 ${IRM_SOURCES})
 # Exclude unsupported BSP modules for DM_MC_02
-list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_imu\\.cc$")
-list(REMOVE_ITEM IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_imu.cc)
 list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_(laser|os|sdio|ultrasonic|usb)\\.cc$")
 # Add USB stub for DM_MC_02 (provides empty implementations)
 list(APPEND IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_usb_stub.cc)
 # Exclude CAN (use FDCAN instead) for DM_MC_02
 list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_can\\.cc$")
-# Exclude unsupported library modules for DM_MC_02 (no default implementations)
-# Note: Most modules now work with ARM DSP support
-list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/libraries/(chassis|fortress|gimbal|lidar07|pose)\\.cc$")
-list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/libraries/(minipc_protocol|oled|dbus|sbus)\\.cc$")
+# Exclude library modules that depend on unavailable hardware (I2C not configured)
+list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/libraries/(lidar07|oled|pose)\\.cc$")
 # Add FDCAN BSP for DM_MC_02
 list(APPEND IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_fdcan.cc)
 

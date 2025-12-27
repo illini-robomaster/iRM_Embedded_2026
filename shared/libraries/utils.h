@@ -22,6 +22,10 @@
 
 #include "stdint.h"
 
+#include <cmath>
+#include <vector>
+#include <algorithm>
+#include <deque>
 /**
  * @brief clip a value to fall into a given range
  *
@@ -37,6 +41,23 @@
 template <typename T>
 T clip(T value, T min, T max) {
   return value < min ? min : (value > max ? max : value);
+}
+
+/**
+ * @brief map a value between -1 and 1 to a given range
+ *
+ * @tparam T    type of the value
+ * @param value value to the clipped
+ * @param min   range min
+ * @param max   range max
+ *
+ * @return clipped value that falls in the range [min, max]
+ *
+ * @note undefined behavior if min > max
+ */
+template <typename T>
+T map(T value, T min, T max) {
+  return value * (max - min) / 2 + (max - min) / 2 + min;
 }
 
 /**
@@ -69,6 +90,27 @@ T wrap(T value, T min, T max) {
   const T range = max - min;
   return value < min ? value + range : (value > max ? value - range : value);
 }
+
+/**
+ * @brief wrap around a value to fall into a given range, can deal with offset of >1 cycle
+ *
+ * @tparam T    type of the value
+ * @param value value to be wrapped around
+ * @param min   range min
+ * @param max   range max
+ *
+ * @return wrapped around value that falls in the range [min, max]
+ *
+ * @note undefined behavior if value is more than one cycle away from min or max
+ */
+template <typename T>
+T hard_wrap(T value, T min, T max) {
+  const T range = max - min;
+  while(value < min) value += range;
+  while(value > max) value -= range;
+  return value;
+}
+
 
 /**
  * @brief clip a value to fall into a given range; can wrap around domain
@@ -201,3 +243,30 @@ uint16_t float_to_uint(float x, float x_min, float x_max, int bits);
  * @return value converted from unsigned int to float
  */
 float uint_to_float(int x_int, float x_min, float x_max, int bits);
+
+/**
+ * @brief A moving average filter
+ * @param window_size the size of sliding window for average filtering
+ * @return the filtered value
+ */
+template <typename T>
+class MovingAverageFilter {
+public:
+    MovingAverageFilter(size_t window_size):window_size_(window_size){}
+
+    T update(T measurement){
+      if (window.size() >= window_size_) {
+        window.pop_front();
+      }
+      window.push_back(measurement);
+      T sum = 0;
+      for (const T &val: window){
+        sum += val;
+      }
+      return sum / window.size();
+    }
+
+private:
+    size_t window_size_;
+    std::deque<T> window;
+};

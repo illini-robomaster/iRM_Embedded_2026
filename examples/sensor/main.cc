@@ -29,8 +29,23 @@ static bsp::GPIO* input2 = nullptr;
 static bsp::GPIO* input3 = nullptr;
 static bsp::GPIO* input4 = nullptr;
 
+GPIO_InitTypeDef GPIO_InitStruct;
+
 void RM_RTOS_Init(void) {
   print_use_uart(&huart1);
+  HAL_GPIO_DeInit(IN1_GPIO_Port, IN1_Pin);
+  HAL_GPIO_DeInit(IN2_GPIO_Port, IN2_Pin);
+  HAL_GPIO_DeInit(IN3_GPIO_Port, IN3_Pin);
+  HAL_GPIO_DeInit(IN4_GPIO_Port, IN4_Pin);
+  GPIO_InitStruct.Pin = IN1_Pin | IN2_Pin | IN3_Pin | IN4_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(IN1_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(IN2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(IN3_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(IN4_GPIO_Port, &GPIO_InitStruct);
+  osDelay(100);
   input1 = new bsp::GPIO(IN1_GPIO_Port, IN1_Pin);
   input2 = new bsp::GPIO(IN2_GPIO_Port, IN2_Pin);
   input3 = new bsp::GPIO(IN3_GPIO_Port, IN3_Pin);
@@ -41,10 +56,18 @@ void RM_RTOS_Default_Task(const void* arguments) {
   UNUSED(arguments);
 
   while (true) {
-    set_cursor(0, 0);
-    clear_screen();
-    print("sensor: %d %d %d %d\r\n", input1->Read(), input2->Read(), input3->Read(),
-          input4->Read());
+//    set_cursor(0, 0);
+//    clear_screen();
+//    print("sensor: %d %d %d %d\r\n", input1->Read(), input2->Read(), input3->Read(),
+//          input4->Read());
+    GPIO_PinState in1 = HAL_GPIO_ReadPin(IN1_GPIO_Port, IN1_Pin);
+    GPIO_PinState in2 = HAL_GPIO_ReadPin(IN2_GPIO_Port, IN2_Pin);
+    GPIO_PinState in3 = HAL_GPIO_ReadPin(IN3_GPIO_Port, IN3_Pin);
+    GPIO_PinState in4 = HAL_GPIO_ReadPin(IN4_GPIO_Port, IN4_Pin);
+
+    print("HAL: %d %d %d %d\r\n", in1, in2, in3, in4);
+
+
     osDelay(100);
   }
 }

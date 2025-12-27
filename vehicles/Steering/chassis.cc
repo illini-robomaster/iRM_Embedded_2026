@@ -341,19 +341,12 @@ void chassisTask(void* arg) {
     receive->TransmitOutput();
 
     receive->cmd.id = bsp::COOLING_LIMIT1;
-    receive->cmd.data_float = (float)referee->game_robot_status.shooter_id1_17mm_cooling_limit;
+    receive->cmd.data_float = (float)referee->game_robot_status.shooter_barrel_cooling_value;
     receive->TransmitOutput();
 
-    receive->cmd.id = bsp::COOLING_LIMIT2;
-    receive->cmd.data_float = (float)referee->game_robot_status.shooter_id2_17mm_cooling_limit;
-    receive->TransmitOutput();
 
     receive->cmd.id = bsp::SPEED_LIMIT1;
-    receive->cmd.data_float = (float)referee->game_robot_status.shooter_id1_17mm_speed_limit;
-    receive->TransmitOutput();
-
-    receive->cmd.id = bsp::SPEED_LIMIT2;
-    receive->cmd.data_float = (float)referee->game_robot_status.shooter_id2_17mm_speed_limit;
+    receive->cmd.data_float = (float)referee->game_robot_status.shooter_barrel_heat_limit;
     receive->TransmitOutput();
 
     osDelay(CHASSIS_TASK_DELAY);

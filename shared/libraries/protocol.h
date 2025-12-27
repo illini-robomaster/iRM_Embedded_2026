@@ -160,7 +160,12 @@ typedef enum {
   BULLET_REMAINING = 0x0208,
   RFID_STATUS = 0x0209,
   DART_CLIENT_CMD = 0x020A,
+  GROUND_ROBOT_POSITION = 0x020B,
+  RADAR_MARK_PROGRESS = 0x020C,
+  SENTRY_INFO = 0x020D,
+  RADAR_INFO = 0x020E,
   STUDENT_INTERACTIVE = 0x0301,
+
 } referee_cmd;
 
 /* ===== GAME_STATUS 0x0001 1Hz ===== */
@@ -218,11 +223,13 @@ typedef struct {
 typedef struct {
   uint8_t level;
   uint8_t foul_robot_id;
+  uint8_t count;
 } __packed referee_warning_t;
 
 /* ===== DART_REMAINING_TIME 0x0105 1Hz ===== */
 typedef struct {
   uint8_t dart_remaining_time;
+  uint16_t dart_info;
 } __packed dart_remaining_time_t;
 
 /* ===== GAME_ROBOT_STATUS 0x0201 10Hz ===== */
@@ -232,17 +239,8 @@ typedef struct {
   uint16_t remain_HP;
   uint16_t max_HP;
 
-  uint16_t shooter_id1_17mm_cooling_rate;
-  uint16_t shooter_id1_17mm_cooling_limit;
-  uint16_t shooter_id1_17mm_speed_limit;
-
-  uint16_t shooter_id2_17mm_cooling_rate;
-  uint16_t shooter_id2_17mm_cooling_limit;
-  uint16_t shooter_id2_17mm_speed_limit;
-
-  uint16_t shooter_id1_42mm_cooling_rate;
-  uint16_t shooter_id1_42mm_cooling_limit;
-  uint16_t shooter_id1_42mm_speed_limit;
+  uint16_t shooter_barrel_cooling_value;
+  uint16_t shooter_barrel_heat_limit;
 
   uint16_t chassis_power_limit;
   uint8_t mains_power_gimbal_output : 1;
@@ -265,18 +263,22 @@ typedef struct {
 typedef struct {
   float x;
   float y;
-  float z;
   float yaw;
 } __packed game_robot_pos_t;
 
 /* ===== BUFF 0x0204 1Hz ===== */
 typedef struct {
-  uint8_t power_rune_buff;
+  uint8_t recovery_buff;
+  uint8_t cooling_buff;
+  uint8_t defence_buff;
+  uint8_t vulnerability_buff;
+  uint16_t attack_buff;
 } __packed buff_t;
 
 /* ===== AERIAL_ROBOT_ENERGY 0x0205 10Hz ===== */
 typedef struct {
-  uint8_t attack_time;
+  uint8_t airforce_status;
+  uint8_t time_remain;
 } __packed aerial_robot_energy_t;
 
 /* ===== ROBOT_HURT 0x0206 ===== */
@@ -312,6 +314,46 @@ typedef struct {
   uint16_t target_change_time;
   uint16_t operate_launch_cmd_time;
 } __packed dart_client_cmd_t;
+
+
+/* ====== GROUND_ROBOT_POSITION 0x020B 1Hz ====== */
+typedef struct {
+  float hero_x;
+  float hero_y;
+  float engiener_x;
+  float engineer_y;
+  float standard_3_x;
+  float standard_3_y;
+  float standard_4_x;
+  float standard_4_y;
+  float standard_5_x;
+  float standard_5_y;
+
+} __packed ground_robot_position_t;
+
+
+/* ====== RADAR_MARK_PROGRESS 0x020C 1Hz ======= */
+typedef struct 
+{ 
+  uint8_t mark_hero_progress; 
+  uint8_t mark_engineer_progress; 
+  uint8_t mark_standard_3_progress; 
+  uint8_t mark_standard_4_progress; 
+  uint8_t mark_standard_5_progress; 
+  uint8_t mark_sentry_progress; 
+} __packed radar_mark_data_t;
+
+/* ====== SENTRY_INFO 0x020D 1Hz ======= */
+typedef  struct 
+{ 
+  uint32_t sentry_info; 
+  uint16_t sentry_info_2; 
+} __packed sentry_info_t;
+
+/* ====== RADAR_INFO 0x020E 1Hz =======  */
+typedef struct {
+  uint8_t radar_info;
+} __packed radar_info_t;
 
 typedef struct {
   uint16_t data_cmd_id;
@@ -401,6 +443,10 @@ class Referee : public Protocol {
   bullet_remaining_t bullet_remaining{};
   rfid_status_t rfid_status{};
   dart_client_cmd_t dart_client_cmd{};
+  ground_robot_position_t ground_robot_position{};
+  radar_mark_data_t radar_mark_progress{};
+  sentry_info_t sentry_info{};
+  radar_info_t radar_info{};
 
   graphic_delete_t graphic_delete{};
   graphic_single_t graphic_single{};

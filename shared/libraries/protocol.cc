@@ -134,6 +134,19 @@ bool Referee::ProcessDataRx(int cmd_id, const uint8_t* data, int length) {
     case DART_CLIENT_CMD:
       memcpy(&dart_client_cmd, data, length);
       break;
+    case GROUND_ROBOT_POSITION:
+      memcpy(&ground_robot_position, data, length);
+      break;
+    case RADAR_MARK_PROGRESS:
+      memcpy(&radar_mark_progress, data, length);
+      break;
+    case SENTRY_INFO:
+      memcpy(&sentry_info, data, length);
+      break;
+    case RADAR_INFO:
+      memcpy(&radar_info, data, length);
+      break;
+    
     default:
       return false;
   }

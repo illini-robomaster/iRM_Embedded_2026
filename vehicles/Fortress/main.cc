@@ -440,17 +440,17 @@ void shooterTask(void* arg) {
 
     if (referee->game_robot_status.mains_power_shooter_output &&
         referee->power_heat_data.shooter_id1_17mm_cooling_heat <
-            referee->game_robot_status.shooter_id1_17mm_cooling_limit - 20 &&
+            referee->game_robot_status.shooter_barrel_cooling_value - 20 &&
         (dbus->mouse.l || dbus->swr == remote::UP))
       shooter->LoadNext();
     if (!referee->game_robot_status.mains_power_shooter_output || dbus->keyboard.bit.Q ||
         dbus->swr == remote::DOWN) {
       flywheelFlag = false;
       shooter->SetFlywheelSpeed(0);
-    } else if (referee->game_robot_status.shooter_id1_17mm_speed_limit == 15) {
+    } else if (referee->game_robot_status.shooter_barrel_heat_limit == 15) {
       flywheelFlag = true;
       shooter->SetFlywheelSpeed(440);  // 445 MAX
-    } else if (referee->game_robot_status.shooter_id1_17mm_speed_limit >= 18) {
+    } else if (referee->game_robot_status.shooter_barrel_heat_limit >= 18) {
       flywheelFlag = true;
       shooter->SetFlywheelSpeed(485);  // 490 MAX
     } else {
@@ -1219,13 +1219,13 @@ void RM_RTOS_Default_Task(const void* arg) {
       print("\r\n");
 
       print("Shooter Heat: %hu / %d\r\n", referee->power_heat_data.shooter_id1_17mm_cooling_heat,
-            referee->game_robot_status.shooter_id1_17mm_cooling_limit);
+            referee->game_robot_status.shooter_barrel_cooling_value);
       print("Bullet Speed: %.3f / %d\r\n", referee->shoot_data.bullet_speed,
-            referee->game_robot_status.shooter_id1_17mm_speed_limit);
+            referee->game_robot_status.shooter_barrel_heat_limit);
       print("Bullet Frequency: %hhu\r\n", referee->shoot_data.bullet_freq);
 
       if (referee->shoot_data.bullet_speed >
-          referee->game_robot_status.shooter_id1_17mm_speed_limit)
+          referee->game_robot_status.shooter_barrel_heat_limit)
         pass = false;
       print("\r\nSpeed Limit Test: %s\r\n", pass ? "PASS" : "FAIL");
     }

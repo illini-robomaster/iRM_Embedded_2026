@@ -73,9 +73,11 @@ void RM_RTOS_Default_Task(const void* argument) {
     if (flags & RX_SIGNAL) {  // unnecessary check
       /* time the non-blocking rx / tx calls (should be <= 1 osTick) */
       length = uart->Read(&data);
+      // data read from uart, basically hearing from keyboard
       uart->Write(data, length);
       uart->Write(data, length);
       uart->Write(data, length);
+      // data written to uart, echos three times
     }
   }
 }

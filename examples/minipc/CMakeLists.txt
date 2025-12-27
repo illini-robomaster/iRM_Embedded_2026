@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------- #
 #                                                                        #
-#  Copyright (C) 2022                                                    #
+#  Copyright (C) 2024                                                    #
 #  Illini RoboMaster @ University of Illinois at Urbana-Champaign.       #
 #                                                                        #
 #  This program is free software: you can redistribute it and/or modify  #
@@ -44,3 +44,6 @@ irm_add_arm_executable(${PROJECT_NAME}_minipccontroller
     TARGET DJI_Board_TypeC
     SOURCES MiniPCController.cc)
 
+irm_add_arm_executable(${PROJECT_NAME}_chassis
+        TARGET DJI_Board_TypeC
+        SOURCES ChassisTest.cc)

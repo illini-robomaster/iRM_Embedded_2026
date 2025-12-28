@@ -16,5 +16,7 @@ void VirtualUSB::SetupTx(uint32_t tx_buffer_size) { (void)tx_buffer_size; }
 void VirtualUSB::SetupRx(uint32_t rx_buffer_size) { (void)rx_buffer_size; }
 uint32_t VirtualUSB::Read(uint8_t** data) { (void)data; return 0; }
 uint32_t VirtualUSB::Write(uint8_t* data, uint32_t length) { (void)data; (void)length; return 0; }
+void VirtualUSB::RxCompleteCallback() {}
+void VirtualUSB::TxCompleteCallback() {}
 
 }  // namespace bsp

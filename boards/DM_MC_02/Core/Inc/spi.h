@@ -32,16 +32,16 @@ extern "C" {
 
 /* USER CODE END Includes */
 
-extern SPI_HandleTypeDef hspi1;
-
 extern SPI_HandleTypeDef hspi2;
+
+extern SPI_HandleTypeDef hspi6;
 
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
 
-void MX_SPI1_Init(void);
 void MX_SPI2_Init(void);
+void MX_SPI6_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 

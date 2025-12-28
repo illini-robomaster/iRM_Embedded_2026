@@ -28,7 +28,7 @@ static bsp::CAN* can = nullptr;
 static control::MotorCANBase* motor = nullptr;
 
 void RM_RTOS_Init() {
-  print_use_uart(&huart10);
+  print_use_uart(&huart7);
 
   // DM_MC_02 uses FDCAN instead of CAN
   // The bsp::CAN type is automatically aliased to FDCAN on this board

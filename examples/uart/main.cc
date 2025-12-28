@@ -77,9 +77,11 @@ void RM_RTOS_Default_Task(const void* argument) {
     uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
     if (flags & RX_SIGNAL) {
       length = uart->Read(&data);
+      // data read from uart, basically hearing from keyboard
       uart->Write(data, length);
       uart->Write(data, length);
       uart->Write(data, length);
+      // data written to uart, echos three times
     }
   }
 }

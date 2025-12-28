@@ -30,6 +30,11 @@
  * SPI6 Configuration (already done in CubeMX):
  *   - Mode: Transmit Only Master
  *   - Clock: 24MHz HSE based
+ *
+ * Note: WS2812 LEDs have internal latching - they retain their color state
+ *       until new data is received or power is cycled. If you flash a different
+ *       program, the LEDs will stay lit with their last color. To turn them off,
+ *       either power cycle the LED strip or send Clear() + Update() commands.
  */
 
 #include "main.h"
@@ -48,7 +53,8 @@ extern SPI_HandleTypeDef hspi6;
 static bsp::WS2812* led_strip = nullptr;
 
 void RM_RTOS_Init(void) {
-  print_use_uart(&huart7);
+  // print_use_uart(&huart7);
+  print_use_usb();
 
   // Initialize WS2812 using SPI6 (PA7)
   led_strip = new bsp::WS2812(&hspi6, NUM_LEDS);

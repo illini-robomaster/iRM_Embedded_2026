@@ -63,8 +63,8 @@ list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_(laser|os|sdio|ultrasonic
 list(APPEND IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_usb_stub.cc)
 # Exclude CAN (use FDCAN instead) for DM_MC_02
 list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/bsp_can\\.cc$")
-# Exclude library modules that depend on unavailable hardware (I2C not configured)
-list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/libraries/(lidar07|oled|pose)\\.cc$")
+# Exclude library modules that depend on unavailable hardware (I2C not configured, CAN-dependent libs)
+list(FILTER IRM_SOURCES_DM_MC_02 EXCLUDE REGEX ".*/libraries/(lidar07|oled|pose|hrb_supercap)\\.cc$")
 # Add FDCAN BSP for DM_MC_02
 list(APPEND IRM_SOURCES_DM_MC_02 ${CMAKE_CURRENT_SOURCE_DIR}/bsp/bsp_fdcan.cc)
 

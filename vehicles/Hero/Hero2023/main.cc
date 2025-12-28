@@ -484,7 +484,7 @@ void shooter_task(void* arg) {
     if (LoadDetect.posEdge() && !GimbalDead) {
       osDelay(100);
       // step 1
-      trigger->SetOutPutAngle(0);
+      trigger->SetOutputAngle(0);
       osDelay(SHOOTER_OUTER_TASK_DELAY); // wait for the bullet out
       // step 2
       while (true) {
@@ -507,7 +507,7 @@ void shooter_task(void* arg) {
         osDelay(SHOOTER_INNER_TASK_DELAY);
       }
       // step 3 (before release the reload board)
-      trigger->SetOutPutAngle(-80); // need test the trigger angle
+      trigger->SetOutputAngle(-80);  // need test the trigger angle
       osDelay(1500); // need test the delay time(wait for the)
       // after reload pulling
       i = 0;

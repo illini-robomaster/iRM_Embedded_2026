@@ -37,8 +37,8 @@ void Buzzer::SingTone(const BuzzerNote& note) {
     // Silent: just set pulse width to 0 (no output)
     pwm_.SetPulseWidth(0);
   } else {
-    pwm_.SetFrequency(freq);
-    pwm_.SetPulseWidth(1000000 / freq / 2);  // 50% duty cycle
+    // Set frequency and use 50% duty cycle based on ARR
+    pwm_.SetFrequencyWithDutyCycle(freq, 50);
   }
 }
 

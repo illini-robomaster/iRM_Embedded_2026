@@ -69,7 +69,24 @@ void PWM::SetFrequency(uint32_t output_freq) {
   this->output_freq_ = output_freq;
   uint32_t auto_reload = output_freq > 0 ? clock_freq_ / output_freq_ - 1 : 0;
   __HAL_TIM_SET_AUTORELOAD(htim_, auto_reload);
+  // Reset counter to ensure new frequency takes effect immediately
+  // This is important when AutoReloadPreload is disabled
   __HAL_TIM_SET_COUNTER(htim_, 0);
+  // Generate update event to reload ARR immediately
+  htim_->Instance->EGR = TIM_EGR_UG;
+}
+
+void PWM::SetFrequencyWithDutyCycle(uint32_t output_freq, uint32_t duty_percent) {
+  this->output_freq_ = output_freq;
+  uint32_t auto_reload = output_freq > 0 ? clock_freq_ / output_freq_ - 1 : 0;
+  uint32_t compare = auto_reload * duty_percent / 100;
+
+  // Set ARR and CCR
+  htim_->Instance->ARR = auto_reload;
+  __HAL_TIM_SET_COMPARE(htim_, channel_, compare);
+  // Reset counter and generate update event
+  htim_->Instance->CNT = 0;
+  htim_->Instance->EGR = TIM_EGR_UG;
 }
 
 void PWM::SetPulseWidth(uint32_t pulse_width) {

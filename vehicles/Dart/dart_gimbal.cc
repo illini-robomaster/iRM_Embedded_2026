@@ -18,296 +18,196 @@
  *                                                                          *
  ****************************************************************************/
 
- #include "bsp_gpio.h"
- #include "bsp_print.h"
- #include "cmsis_os.h"
- #include "controller.h"
- #include "dbus.h"
- #include "main.h"
- #include "math.h"
- #include "motor.h"
- #include "utils.h"
- 
- #define LEFT_MOTOR_PWM_CHANNEL 1
- #define LOADER_SLIDE_MOTOR_PWM_CHANNEL 2
- #define LOADER_FEED_MOTOR_PWM_CHANNEL 3
- #define TIM_CLOCK_FREQ 1000000
- #define MOTOR_OUT_FREQ 50
- 
- #define KEY_GPIO_GROUP GPIOA
- #define KEY_GPIO_PIN GPIO_PIN_0
- 
- #define DEFAULT_TASK_DELAY 100
- 
- #define MAX_IOUT6020 10000
- #define MAX_IOUT 16384
- 
- #define MAX_OUT6020 30000
- #define MAX_OUT 60000
- 
- #define IDLE_THROTTLE 1500
- 
-#define LOADER_FEED_MOTOR_CONTACT_OUTPUT 660
-#define LOADER_FEED_MOTOR_RELEASE_OUTPUT -1000
-#define LOADER_SLIDE_MOTOR_DOWN_OUTPUT 10
-#define LOADER_SLIDE_MOTOR_UP_OUTPUT 385
- 
- #define ABS(x) ((x) > 0 ? (x) : -(x))
- 
- #define MAP_RANGE(x, in_min, in_max, out_min, out_max) (((float)(x) - (float)(in_min)) * ((float)(out_max) - (float)(out_min)) / ((float)(in_max) - (float)(in_min)) + (float)(out_min))
- 
- bsp::GPIO* key = nullptr;
- 
- control::MotorPWMBase* trigger_motor;
- 
- control::MotorPWMBase* loader_slide_motor;
- control::MotorPWMBase* loader_feed_motor;
- control::MotorCANBase* loader_catridge_motor;
- 
- control::MotorCANBase* load_motor_1;
- control::MotorCANBase* load_motor_2;
- control::MotorCANBase* force_motor;
- control::MotorCANBase* yaw_motor;
- 
- static remote::DBUS* dbus;
- static bsp::CAN* can1 = nullptr;  // for load motor
- 
- // variables:
- 
- static int16_t load_motor_1_output = 0;
- static int16_t load_motor_2_output = 0;
- static int16_t force_motor_output = 0;
- 
- static int16_t loader_catridge_motor_output = 0;  // output for loader catridge motor
- 
- static uint16_t load_motor_temperature = 0;
- static int16_t load_motor_current = 0;
+#include "bsp_buzzer.h"
+#include "bsp_gpio.h"
+#include "bsp_laser.h"
+#include "bsp_print.h"
+#include "cmsis_os.h"
+#include "controller.h"
+#include "dbus.h"
+#include "main.h"
+#include "motor.h"
 
- static bool motor_cooling_state = false;  // flag for temperature protection
+#define LEFT_MOTOR_PWM_CHANNEL 1
+#define TIM_CLOCK_FREQ 1000000
+#define MOTOR_OUT_FREQ 50
+#define IDLE_THROTTLE 1500
+#define DEFAULT_TASK_DELAY 100
 
- #define MOTOR_TEMP_HIGH_THRESHOLD 80  // stop motor when temperature exceeds this
- #define MOTOR_TEMP_LOW_THRESHOLD 40   // resume motor when temperature drops below this
+#define KEY_GPIO_GROUP K1_GPIO_Port
+#define KEY_GPIO_PIN K1_Pin
 
- float Kp_load = 50;
- float Ki_load = 15;
- float Kd_load = 65;
+#define MAX_IOUT 16384
+#define MAX_OUT 60000
 
+#define MOTOR_TEMP_HIGH_THRESHOLD 80
+#define MOTOR_TEMP_LOW_THRESHOLD 40
+#define ALARM_INTERVAL 100
 
- BoolEdgeDetector next_loading_position(false);  // edge detector for next loading position
- 
- // thread attributes
- 
- // helpers
- void reload_task(uint8_t state);
- 
- osThreadId_t dartLoadTaskHandle;
- const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
-                                               .attr_bits = osThreadDetached,
-                                               .cb_mem = nullptr,
-                                               .cb_size = 0,
-                                               .stack_mem = nullptr,
-                                               .stack_size = 256 * 4,
-                                               .priority = (osPriority_t)osPriorityNormal,
-                                               .tz_module = 0,
-                                               .reserved = 0};
- 
- void dartLoadTask(void* arg) {
-   UNUSED(arg);
-   float param[] = {Kp_load, Ki_load, Kd_load};
-   float catridge_param[] = {180.0, 5.0, 10.0};
-   //轻微动荡 260，5，10
-    control::PIDController pid(50, 5, 10); 
+#define MAP_RANGE(x, in_min, in_max, out_min, out_max) \
+  (((float)(x) - (float)(in_min)) * ((float)(out_max) - (float)(out_min)) / \
+  ((float)(in_max) - (float)(in_min)) + (float)(out_min))
 
-   // TODO: adjust the PID parameters based on different motor characteristics
-   control::ConstrainedPID pid_left(param, MAX_IOUT, MAX_OUT);
-   control::ConstrainedPID pid_right(param, MAX_IOUT, MAX_OUT);
-   control::ConstrainedPID pid_force(param, MAX_IOUT, MAX_OUT);
-   control::ConstrainedPID pid_loader_catridge(catridge_param, MAX_IOUT6020, MAX_OUT6020);
-   control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2, force_motor};  // load motor
-   control::MotorCANBase* motor_loader_catridge[] = {loader_catridge_motor};               // loader catridge motor
-   control::MotorCANBase* yaw_motors[] = {yaw_motor};
-   float diff_load_1 = 0;
-   float diff_load_2 = 0;
-   float diff_force = 0;
-   float load_target_speed = 0;   // target speed for load motor, can be adjusted
-   float force_target_speed = 0;  // target speed for force motor, can be adjusted
-   float yaw_target_speed = 0; // target speed for yaw motor, can be adjusted
-   uint8_t curr_state = 0;        // current state of the dart loading mechanism
- 
-   float diff_theta_loader_catridge = 0;                   // difference in angle for loader catridge motor
-   float target_theta_loader_catridge = 4.144;             // target angle for loader catridge motor
- 
-   diff_theta_loader_catridge = loader_catridge_motor->GetThetaDelta(target_theta_loader_catridge);  // Get the current angle difference
- 
+// Peripherals
+bsp::GPIO* key = nullptr;
+bsp::Buzzer* buzzer = nullptr;
+bsp::Laser* laser = nullptr;
 
-   while (true) {
-     // Temperature protection logic with hysteresis
-     load_motor_temperature = load_motor_1->GetTemp();
-     if (load_motor_temperature > MOTOR_TEMP_HIGH_THRESHOLD && !motor_cooling_state) {
-       motor_cooling_state = true;  // enter cooling state
-       print("Motor overheated! Temperature: %d C, entering cooling state\r\n", load_motor_temperature);
-     } else if (load_motor_temperature < MOTOR_TEMP_LOW_THRESHOLD && motor_cooling_state) {
-       motor_cooling_state = false;  // exit cooling state
-       print("Motor cooled down! Temperature: %d C, resuming operation\r\n", load_motor_temperature);
-     }
+// Alarm sound for overheating
+using Note = bsp::BuzzerNote;
+static bsp::BuzzerNoteDelayed AlarmSound[] = {
+    {Note::Do1H, 100}, {Note::Silent, 50}, {Note::Do1H, 100}, {Note::Silent, 50},
+    {Note::Do1H, 100}, {Note::Silent, 200}, {Note::Silent, 0}, {Note::Finish, 0}};
 
-     // If in cooling state, skip normal operations and stop load motors
-     if (motor_cooling_state) {
-       // Stop load motors during cooling (force_motor continues to operate)
-       load_motor_1->SetOutput(0);
-       load_motor_2->SetOutput(0);
-       control::MotorCANBase* motors_can1_cooling[] = {load_motor_1, load_motor_2};
-       control::MotorCANBase::TransmitOutput(motors_can1_cooling, 2);
-       print("Cooling... Temperature: %d C\r\n", load_motor_temperature);
-       osDelay(500);  // longer delay during cooling
-       continue;  // skip the rest of the loop
-     }
+// Motors
+control::MotorPWMBase* trigger_motor = nullptr;
+control::MotorCANBase* load_motor_1 = nullptr;
+control::MotorCANBase* load_motor_2 = nullptr;
+control::MotorCANBase* force_motor = nullptr;
+control::MotorCANBase* yaw_motor = nullptr;
 
-     // This is for the trigger motor
-     if (dbus->swr == remote::UP) {  // when SWR is up, increase motor output, this will release the dart and launch it
-       trigger_motor->SetOutput(0);
-     } else {  // when SWR is mid, stop the motor, this will make the trigger hold the dart in place
-       trigger_motor->SetOutput(600);
-     }
-     if (dbus->swr == remote::DOWN) {  // when SWR is down, decrease motor output
-       osDelay(2000);
-       if (curr_state == 0) {
-         curr_state = 1;  // change to ready state
-       } else if (curr_state == 1) {
-         curr_state = 2;  // change to contact state
-       } else if (curr_state == 2) {
-         curr_state = 3;  // change to loading state
-       } else if (curr_state == 3) {
-         curr_state = 4;  // change to fire state
-       } else if (curr_state == 4) {
-         curr_state = 0;  // change to release state
-       }
-     }
- 
+// Communication
+static remote::DBUS* dbus = nullptr;
+static bsp::CAN* can1 = nullptr;
 
-     // Load motor control logic
-     if (dbus->swl == remote::UP) {  // when SWL is up, run the load motor
-       // Set target speed for load motor
-       load_target_speed = 300;  // adjust target speed based on dbus ch3 input
-     } else if (dbus->swl == remote::DOWN) {
-       load_target_speed = -270;
-     } else {
-       load_target_speed = 0;  // stop the load motor when SWL is at mid
-     }
+// State variables
+static uint16_t load_motor_temperature = 0;
+static bool motor_cooling_state = false;
+static uint32_t alarm_counter = 0;
 
-    // Yaw motors control logic
-     if (dbus->ch0 > 300) { //when right joystick push to the right
-      yaw_target_speed = 100; //yaw motors push the dart system to the right at constant speed, with dead zone of 300
-    } else if (dbus->ch0 < -300){
+// PID parameters
+float Kp_load = 50;
+float Ki_load = 15;
+float Kd_load = 65;
+
+osThreadId_t dartLoadTaskHandle;
+const osThreadAttr_t dartLoadTaskAttribute = {.name = "dartLoadTask",
+                                              .attr_bits = osThreadDetached,
+                                              .cb_mem = nullptr,
+                                              .cb_size = 0,
+                                              .stack_mem = nullptr,
+                                              .stack_size = 256 * 4,
+                                              .priority = (osPriority_t)osPriorityNormal,
+                                              .tz_module = 0,
+                                              .reserved = 0};
+
+void dartLoadTask(void* arg) {
+  UNUSED(arg);
+  float param[] = {Kp_load, Ki_load, Kd_load};
+  control::PIDController pid_yaw(50, 5, 10);
+  control::ConstrainedPID pid_left(param, MAX_IOUT, MAX_OUT);
+  control::ConstrainedPID pid_right(param, MAX_IOUT, MAX_OUT);
+  control::ConstrainedPID pid_force(param, MAX_IOUT, MAX_OUT);
+
+  control::MotorCANBase* motors_can1_load[] = {load_motor_1, load_motor_2, force_motor};
+  control::MotorCANBase* yaw_motors[] = {yaw_motor};
+
+  float load_target_speed = 0;
+  float force_target_speed = 0;
+  float yaw_target_speed = 0;
+
+  while (true) {
+    // Temperature protection
+    load_motor_temperature = load_motor_1->GetTemp();
+    if (load_motor_temperature > MOTOR_TEMP_HIGH_THRESHOLD && !motor_cooling_state) {
+      motor_cooling_state = true;
+      print("Motor overheated! Temperature: %d C\r\n", load_motor_temperature);
+    } else if (load_motor_temperature < MOTOR_TEMP_LOW_THRESHOLD && motor_cooling_state) {
+      motor_cooling_state = false;
+      print("Motor cooled down! Temperature: %d C\r\n", load_motor_temperature);
+    }
+
+    if (motor_cooling_state) {
+      alarm_counter++;
+      if (alarm_counter >= ALARM_INTERVAL) {
+        buzzer->SingSong(AlarmSound);
+        alarm_counter = 0;
+      }
+    } else {
+      alarm_counter = 0;
+    }
+
+    // Trigger motor control
+    if (dbus->swr == remote::UP) {
+      trigger_motor->SetOutput(0);
+    } else if (dbus->swr == remote::DOWN) {
+      trigger_motor->SetOutput(600);
+    } else {
+      trigger_motor->SetOutput(300);
+    }
+
+    // Load motor control
+    if (dbus->swl == remote::UP) {
+      load_target_speed = 300;
+    } else if (dbus->swl == remote::DOWN) {
+      load_target_speed = -270;
+    } else {
+      load_target_speed = 0;
+    }
+
+    // Yaw motor control
+    if (dbus->ch0 > 300) {
+      yaw_target_speed = 100;
+    } else if (dbus->ch0 < -300) {
       yaw_target_speed = -100;
     } else {
-      yaw_target_speed = 0; // stop the yaw motors when no input from right joystick
+      yaw_target_speed = 0;
     }
- 
-     next_loading_position.input(dbus->ch1 > 300);                                     // use SHIFT key to detect next loading position
-     if (next_loading_position.posEdge()) {                                            // if next loading position is detected
-       target_theta_loader_catridge += M_PI / 3;                                         // increase the target angle for loader catridge motor
-       target_theta_loader_catridge = fmod(target_theta_loader_catridge, (2 * M_PI));  // ensure the target angle is within [0, 2PI]
-     }
 
-     // force target speed of the force
-     
-     force_target_speed = MAP_RANGE(dbus->ch3, -660, 660, -500, 500);  // map ch3 to target speed for force motor
- 
-     // Compute the omega delta for PID control
-     diff_load_1 = load_motor_1->GetOmegaDelta(-load_target_speed);  // Get the current speed difference
-     diff_load_2 = load_motor_2->GetOmegaDelta(load_target_speed);   // Get the current speed difference for second motor if needed
-     diff_force = force_motor->GetOmegaDelta(force_target_speed);    // Get the current speed difference for force motor
- 
-     load_motor_1_output = pid_left.ComputeConstrainedOutput(diff_load_1);
-     load_motor_2_output = pid_right.ComputeConstrainedOutput(diff_load_2);
-     force_motor_output = pid_force.ComputeConstrainedOutput(diff_force);
-     diff_theta_loader_catridge = loader_catridge_motor->GetThetaDelta(target_theta_loader_catridge);  // Get the current angle difference for loader catridge motor
-     loader_catridge_motor_output = pid_loader_catridge.ComputeConstrainedOutput(diff_theta_loader_catridge);
- 
-     load_motor_1->SetOutput(load_motor_1_output);
-     load_motor_2->SetOutput(load_motor_2_output);
-     force_motor->SetOutput(force_motor_output);
-     loader_catridge_motor->SetOutput(loader_catridge_motor_output);
-     control::MotorCANBase::TransmitOutput(motors_can1_load, 3);  // Transmit the output to the load motor
-     control::MotorCANBase::TransmitOutput(motor_loader_catridge, 1);  // Transmit the output to the loader catridge motor
-     // Three loading points in theta for 6.255 radian, increase by 0.3333 to clear the passage for dart launch
-     // Then the loader will rotate back to 6.255 radian
+    // Force motor control
+    force_target_speed = MAP_RANGE(dbus->ch3, -660, 660, -500, 500);
 
-     //Compute yaw motor pid
-     float diff = yaw_motor->GetOmegaDelta(yaw_target_speed);  
-     int16_t out = pid.ComputeConstrainedOutput(diff);
-     yaw_motor->SetOutput(out);
-     control::MotorCANBase::TransmitOutput(yaw_motors, 1);
-     yaw_motor->PrintData();
+    // PID control for load motors
+    float diff_load_1 = load_motor_1->GetOmegaDelta(-load_target_speed);
+    float diff_load_2 = load_motor_2->GetOmegaDelta(load_target_speed);
+    float diff_force = force_motor->GetOmegaDelta(force_target_speed);
 
-     // Update motor status
-     load_motor_current = load_motor_1->GetCurr();
+    int16_t load_motor_1_output = pid_left.ComputeConstrainedOutput(diff_load_1);
+    int16_t load_motor_2_output = pid_right.ComputeConstrainedOutput(diff_load_2);
+    int16_t force_motor_output = pid_force.ComputeConstrainedOutput(diff_force);
 
-    //  print("loader catridge motor angle: % .4f \r\n ", loader_catridge_motor->GetTheta());
-     print("target theta load: %.4f, Motor Temp: %d C\r\n", target_theta_loader_catridge, load_motor_temperature);
-     switch (curr_state) {
-       case 0:  // release state
-         loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
-         loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
-         break;
-       case 1:  // ready state
-         loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
-         loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
-         break;
-       case 2:  // contact state
-         loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_UP_OUTPUT);
-         loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
-         break;
-       case 3:  // loading state
-         loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
-         loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_CONTACT_OUTPUT);
-         break;
-       case 4:  // fire state
-         loader_slide_motor->SetOutput(LOADER_SLIDE_MOTOR_DOWN_OUTPUT);
-         loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
-         break;
-       default:
-         break;
-     }
-     osDelay(5);
- 
-     // Load motor control
-   }
- }
- 
- void RM_RTOS_Init(){
-     print_use_uart(&huart1);
-     key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
-     trigger_motor = new control::MotorPWMBase(&htim1, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, IDLE_THROTTLE);
-     loader_slide_motor = new control::MotorPWMBase(&htim1, LOADER_SLIDE_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, IDLE_THROTTLE);
-     loader_feed_motor = new control::MotorPWMBase(&htim1, LOADER_FEED_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ, MOTOR_OUT_FREQ, IDLE_THROTTLE);
-     trigger_motor->SetOutput(0);
-     can1 = new bsp::CAN(&hcan1); // can1 for load motor, make sure to initialize can before motor
-     load_motor_1 = new control::Motor3508(can1, 0x201);
-     load_motor_2 = new control::Motor3508(can1, 0x202);
-     loader_catridge_motor = new control::Motor6020(can1, 0x20B);  // loader catridge motor, can be used for other purposes
-     force_motor = new control::Motor2006(can1, 0x204);   // force motor, can be used for other purposes
-     yaw_motor = new control::Motor3508(can1, 0x205);     
-     dbus = new remote::DBUS(&huart3);
-     loader_feed_motor->SetOutput(LOADER_FEED_MOTOR_RELEASE_OUTPUT);
- }
- 
- 
- 
- void RM_RTOS_Threads_Init(void) {
-     dartLoadTaskHandle = osThreadNew(dartLoadTask, NULL, &dartLoadTaskAttribute);
-     if (dartLoadTaskHandle == NULL) {
-         print("Failed to create dart load task\r\n");
-     }
- }
- 
- void RM_RTOS_Default_Task(const void* args){
-     UNUSED(args);
-     while(true){
-       osDelay(DEFAULT_TASK_DELAY);
-     }
- }
- 
- 
- 
+    load_motor_1->SetOutput(load_motor_1_output);
+    load_motor_2->SetOutput(load_motor_2_output);
+    force_motor->SetOutput(force_motor_output);
+    control::MotorCANBase::TransmitOutput(motors_can1_load, 3);
+
+    // PID control for yaw motor
+    float diff_yaw = yaw_motor->GetOmegaDelta(yaw_target_speed);
+    int16_t yaw_output = pid_yaw.ComputeConstrainedOutput(diff_yaw);
+    yaw_motor->SetOutput(yaw_output);
+    control::MotorCANBase::TransmitOutput(yaw_motors, 1);
+
+    osDelay(5);
+  }
+}
+
+void RM_RTOS_Init() {
+  print_use_uart(&huart8);
+
+  key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
+  buzzer = new bsp::Buzzer(&htim12, 1, 1000000);
+  laser = new bsp::Laser(LASER_GPIO_Port, LASER_Pin);
+
+  trigger_motor = new control::MotorPWMBase(&htim4, LEFT_MOTOR_PWM_CHANNEL, TIM_CLOCK_FREQ,
+                                            MOTOR_OUT_FREQ, IDLE_THROTTLE);
+
+  can1 = new bsp::CAN(&hcan1);
+  load_motor_1 = new control::Motor3508(can1, 0x201);
+  load_motor_2 = new control::Motor3508(can1, 0x202);
+  force_motor = new control::Motor2006(can1, 0x204);
+  yaw_motor = new control::Motor3508(can1, 0x205);
+
+  dbus = new remote::DBUS(&huart1);
+  laser->On();
+}
+
+void RM_RTOS_Threads_Init(void) {
+  dartLoadTaskHandle = osThreadNew(dartLoadTask, NULL, &dartLoadTaskAttribute);
+}
+
+void RM_RTOS_Default_Task(const void* args) {
+  UNUSED(args);
+  while (true) {
+    osDelay(DEFAULT_TASK_DELAY);
+  }
+}

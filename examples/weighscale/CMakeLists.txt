@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------- #
 #                                                                        #
-#  Copyright (C) 2025                                                    #
+#  Copyright (C) 2022                                                    #
 #  Illini RoboMaster @ University of Illinois at Urbana-Champaign.       #
 #                                                                        #
 #  This program is free software: you can redistribute it and/or modify  #
@@ -18,21 +18,8 @@
 #                                                                        #
 # ---------------------------------------------------------------------- #
 
-project(Steering ASM C CXX)
+project(example_weighscale ASM C CXX)
 
-
-irm_add_arm_executable(dart_gimbal
-        TARGET DJI_Board_TypeA
-        SOURCES dart_gimbal.cc)
-
-irm_add_arm_executable(dart_gimbal_full_func
-        TARGET DJI_Board_TypeC
-        SOURCES dart_gimbal_full_function.cc)
-
-irm_add_arm_executable(dart_gimbal_load_test
-        TARGET DJI_Board_TypeA
-        SOURCES dart_loading_example.cc)
-
-irm_add_arm_executable(dart_openmv_calibration
-        TARGET DJI_Board_TypeC
-        SOURCES openmv_calibration.cc)
+irm_add_arm_executable(${PROJECT_NAME}
+    TARGET DJI_Board_TypeA
+    SOURCES main.cc)

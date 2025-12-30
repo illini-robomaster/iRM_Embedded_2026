@@ -56,6 +56,14 @@ class PWM {
   void SetFrequency(uint32_t output_freq);
 
   /**
+   * @brief set a new pwm output frequency with duty cycle (for buzzer)
+   *
+   * @param output_freq   desired pwm output frequency, in [Hz]
+   * @param duty_percent  duty cycle percentage (0-100)
+   */
+  void SetFrequencyWithDutyCycle(uint32_t output_freq, uint32_t duty_percent);
+
+  /**
    * @brief set a new pwm output pulse width
    *
    * @param pulse_width   desired pwm output pulse width, in [us]

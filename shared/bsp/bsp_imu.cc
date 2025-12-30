@@ -25,8 +25,10 @@
 #include "MahonyAHRS.h"
 #include "bsp_error_handler.h"
 #include "bsp_mpu6500_reg.h"
+#ifndef BOARD_DM_MC_02
 #include "bsp_os.h"
 #include "dma.h"
+#endif
 
 #define MPU6500_DELAY 55  // SPI delay
 // configured with initialization sequences
@@ -55,6 +57,9 @@ static const uint8_t ist8310_write_reg_data_error[IST8310_WRITE_REG_NUM][3] = {
 #define IST8310_IIC_ADDRESS 0x0E  // the I2C address of IST8310
 
 namespace bsp {
+
+// MPU6500 class is not supported on BOARD_DM_MC_02 (uses STM32F4-specific SPI callbacks)
+#ifndef BOARD_DM_MC_02
 
 MPU6500* MPU6500::mpu6500 = nullptr;
 
@@ -171,6 +176,11 @@ void MPU6500::SPITxRxCpltCallback(SPI_HandleTypeDef* hspi) {
   mpu6500->SPITxRxCpltCallback();
 }
 
+#endif  // !BOARD_DM_MC_02 - End of MPU6500 class
+
+// IST8310 class is also not supported on BOARD_DM_MC_02 (I2C dependent)
+#ifndef BOARD_DM_MC_02
+
 IST8310::IST8310(IST8310_init_t init, IMU_typeC* imu) : GPIT(init.int_pin) {
   hi2c_ = init.hi2c;
   rst_group_ = init.rst_group;
@@ -286,6 +296,8 @@ void IST8310::ist8310_IIC_read_muli_reg(uint8_t reg, uint8_t* buf, uint8_t len) 
 void IST8310::ist8310_IIC_write_muli_reg(uint8_t reg, uint8_t* data, uint8_t len) {
   HAL_I2C_Mem_Write(hi2c_, IST8310_IIC_ADDRESS << 1, reg, I2C_MEMADD_SIZE_8BIT, data, len, 10);
 }
+
+#endif  // !BOARD_DM_MC_02 - End of MPU6500 and IST8310 classes
 
 BMI088::BMI088(BMI088_init_t init) {
   hspi_ = init.hspi;
@@ -556,6 +568,9 @@ void BMI088::gyro_read_over(uint8_t* rx_buf, float* gyro) {
   bmi088_raw_temp = (int16_t)((rx_buf[5]) << 8) | rx_buf[4];
   gyro[2] = bmi088_raw_temp * BMI088_GYRO_SEN;
 }
+
+// Accel_INT, Gyro_INT, IMU_typeC classes use STM32F4-specific DMA registers
+#ifndef BOARD_DM_MC_02
 
 Accel_INT::Accel_INT(uint16_t INT_pin, IMU_typeC* imu) : GPIT(INT_pin) { imu_ = imu; }
 
@@ -855,6 +870,10 @@ void DMACallbackWrapper(SPI_HandleTypeDef* hspi) {
 
 void IMU_typeC::RxCompleteCallback() {}
 
+#endif  // !BOARD_DM_MC_02
+
 } /* namespace bsp */
 
+#ifndef BOARD_DM_MC_02
 void RM_DMA_IRQHandler(SPI_HandleTypeDef* hspi) { bsp::DMACallbackWrapper(hspi); }
+#endif

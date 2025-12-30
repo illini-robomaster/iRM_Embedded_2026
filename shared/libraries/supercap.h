@@ -19,7 +19,7 @@
  ****************************************************************************/
 
 #pragma once
-#include "bsp_can.h"
+#include "bsp_can_bridge.h"
 
 namespace control {
 

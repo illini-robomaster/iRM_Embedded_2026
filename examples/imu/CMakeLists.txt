@@ -35,3 +35,7 @@ irm_add_arm_executable(imu_estimate
 irm_add_arm_executable(${PROJECT_NAME}_typeC
     TARGET DJI_Board_TypeC
     SOURCES typeC.cc)
+
+irm_add_arm_executable(${PROJECT_NAME}_mc02
+    TARGET DM_MC_02
+    SOURCES main_mc02.cc)

@@ -29,7 +29,7 @@ static void bridge_callback(const uint8_t data[], void* args) {
   bridge->UpdateData(data);
 }
 
-CanBridge::CanBridge(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id) {
+CanBridge::CanBridge(bsp::CanInterface* can, uint16_t rx_id, uint16_t tx_id) {
   can_ = can;
   rx_id_ = rx_id;
   tx_id_ = tx_id;

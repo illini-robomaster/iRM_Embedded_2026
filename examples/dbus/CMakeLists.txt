@@ -31,3 +31,7 @@ irm_add_arm_executable(${PROJECT_NAME}_typeC
 irm_add_arm_executable(${PROJECT_NAME}_mc01
         TARGET DM_MC_01
         SOURCES mc01.cc)
+
+irm_add_arm_executable(${PROJECT_NAME}_mc02
+        TARGET DM_MC_02
+        SOURCES mc02.cc)

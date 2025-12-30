@@ -316,38 +316,62 @@ namespace control {
 //==================================================================================================
 // PDI_HV Servo
 //==================================================================================================
-    PDIHV::PDIHV(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq,
-                 uint32_t output_freq, uint32_t idle_throttle)
-            : MotorPWMBase(htim, channel, clock_freq, output_freq, idle_throttle) {
 
-    }
+/**
+ * @brief PDI-HV Servo Motor
+ *
+ * Pulse Width Range: 972 - 1947 µs
+ * Angle Range: -80° to +80° (160° total)
+ * Center Position: 1470 µs (0°)
+ */
+PDIHV::PDIHV(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq,
+             uint32_t output_freq, uint32_t idle_throttle)
+    : MotorPWMBase(htim, channel, clock_freq, output_freq, idle_throttle) {
+}
 
-    void PDIHV::SetOutPutAngle(float degree) {
-      float slope = (2036.0-972.0) / 160.0;
-      int16_t val = int16_t (clip<float>(degree, -80, 80) * slope + 1470);
-      constexpr int16_t MIN_OUTPUT = 972;
-      constexpr int16_t MAX_OUTPUT = 1947;
-//        972 to 1947 for pulse width input u second
-//        -80 to 80 for angle input
+void PDIHV::SetOutputAngle(float degree) {
+  // Clamp angle to valid range
+  degree = clip<float>(degree, -80.0f, 80.0f);
 
-      this->SetOutput(clip<int16_t>(val, MIN_OUTPUT, MAX_OUTPUT));
-      this->SetOutput(val);
-    }
+  // Linear mapping: -80° -> 972µs, 0° -> 1470µs, +80° -> 1947µs (approximately)
+  // slope = (1947 - 972) / 160 = 6.09375
+  constexpr float SLOPE = (1947.0f - 972.0f) / 160.0f;
+  constexpr float CENTER_PULSE = 1470.0f;
 
-    void PDIHV::SetOutput(int16_t val) {
-      constexpr int16_t MIN_OUTPUT = 972;
-      constexpr int16_t MAX_OUTPUT = 1947;
-      MotorPWMBase::SetOutput(clip<int16_t>(val, MIN_OUTPUT, MAX_OUTPUT));
-    }
+  int16_t pulse_width = static_cast<int16_t>(degree * SLOPE + CENTER_PULSE);
+  SetOutput(pulse_width);
+}
+
+void PDIHV::SetOutput(int16_t val) {
+  constexpr int16_t MIN_PULSE = 972;
+  constexpr int16_t MAX_PULSE = 1947;
+  // Directly set pulse width (not offset from idle_throttle)
+  output_ = clip<int16_t>(val, MIN_PULSE, MAX_PULSE);
+  pwm_.SetPulseWidth(output_);
+}
 //==================================================================================================
-// Motor2305
+// Motor2305 (DJI Snail ESC)
 //==================================================================================================
 
-    void Motor2305::SetOutput(int16_t val) {
-      constexpr int16_t MIN_OUTPUT = 0;
-      constexpr int16_t MAX_OUTPUT = 700;
-      MotorPWMBase::SetOutput(clip<int16_t>(val, MIN_OUTPUT, MAX_OUTPUT));
-    }
+/**
+ * @brief DJI Snail 2305 Motor (brushless ESC)
+ *
+ * Idle throttle: ~1100 µs (motor armed but not spinning)
+ * Throttle range: 0-700 µs offset from idle
+ * Full range: 1100 - 1800 µs
+ */
+void Motor2305::SetOutput(int16_t val) {
+  constexpr int16_t MIN_OFFSET = 0;
+  constexpr int16_t MAX_OFFSET = 700;
+  MotorPWMBase::SetOutput(clip<int16_t>(val, MIN_OFFSET, MAX_OFFSET));
+}
+
+void Motor2305::SetThrottle(float percent) {
+  // Map 0-100% to 0-700 offset
+  percent = clip<float>(percent, 0.0f, 100.0f);
+  int16_t offset = static_cast<int16_t>(percent * 7.0f);  // 700/100 = 7
+  SetOutput(offset);
+}
 
 //==================================================================================================
 // ServoMotor
@@ -856,70 +880,57 @@ void Motor4310::MotorEnable() {
   this->can_->Transmit(this->tx_id_actual_, data, 8);
 }
 
-    void Motor4310::MotorEnable() {
-      uint8_t data[8] = {0};
-      data[0] = 0xff;
-      data[1] = 0xff;
-      data[2] = 0xff;
-      data[3] = 0xff;
-      data[4] = 0xff;
-      data[5] = 0xff;
-      data[6] = 0xff;
-      data[7] = 0xfc;
-      this->can_->Transmit(this->tx_id_actual_, data, 8);
-    }
+void Motor4310::MotorDisable() {
+  uint8_t data[8] = {0};
+  data[0] = 0xff;
+  data[1] = 0xff;
+  data[2] = 0xff;
+  data[3] = 0xff;
+  data[4] = 0xff;
+  data[5] = 0xff;
+  data[6] = 0xff;
+  data[7] = 0xfd;
+  this->can_->Transmit(this->tx_id_actual_, data, 8);
+}
 
-    void Motor4310::MotorDisable() {
-      uint8_t data[8] = {0};
-      data[0] = 0xff;
-      data[1] = 0xff;
-      data[2] = 0xff;
-      data[3] = 0xff;
-      data[4] = 0xff;
-      data[5] = 0xff;
-      data[6] = 0xff;
-      data[7] = 0xfd;
-      this->can_->Transmit(this->tx_id_actual_, data, 8);
-    }
+void Motor4310::SetZeroPos() {
+  uint8_t data[8] = {0};
+  data[0] = 0xff;
+  data[1] = 0xff;
+  data[2] = 0xff;
+  data[3] = 0xff;
+  data[4] = 0xff;
+  data[5] = 0xff;
+  data[6] = 0xff;
+  data[7] = 0xfe;
+  this->can_->Transmit(this->tx_id_actual_, data, 8);
+}
 
-    void Motor4310::SetZeroPos() {
-      uint8_t data[8] = {0};
-      data[0] = 0xff;
-      data[1] = 0xff;
-      data[2] = 0xff;
-      data[3] = 0xff;
-      data[4] = 0xff;
-      data[5] = 0xff;
-      data[6] = 0xff;
-      data[7] = 0xfe;
-      this->can_->Transmit(this->tx_id_actual_, data, 8);
-    }
+void Motor4310::SetOutput(float position, float velocity, float kp, float kd, float torque) {
+  kp_set_ = kp;
+  kd_set_ = kd;
+  pos_set_ = position;
+  vel_set_ = velocity;
+  torque_set_ = torque;
+}
 
-    void Motor4310::SetOutput(float position, float velocity, float kp, float kd, float torque) {
-      kp_set_ = kp;
-      kd_set_ = kd;
-      pos_set_ = position;
-      vel_set_ = velocity;
-      torque_set_ = torque;
-    }
+void Motor4310::SetOutput(float position, float velocity) {
+  pos_set_ = position;
+  vel_set_ = velocity;
+}
 
-    void Motor4310::SetOutput(float position, float velocity) {
-      pos_set_ = position;
-      vel_set_ = velocity;
-    }
+void Motor4310::SetOutput(float velocity) {
+  vel_set_ = velocity;
+}
 
-    void Motor4310::SetOutput(float velocity) {
-      vel_set_ = velocity;
-    }
+mode_t Motor4310::GetMode() const {
+  return mode_;
+}
 
-    mode_t Motor4310::GetMode() const {
-      return mode_;
-    }
-
-    void Motor4310::TransmitOutput(Motor4310* motors[], uint8_t num_motors) {
-      for (uint8_t i = 0; i < num_motors; ++i) {
-        uint8_t data[8] = {0};
-        uint16_t kp_tmp, kd_tmp, pos_tmp, vel_tmp, torque_tmp;
+void Motor4310::TransmitOutput(Motor4310* motors[], uint8_t num_motors) {
+  for (uint8_t i = 0; i < num_motors; ++i) {
+    uint8_t data[8] = {0};
+    uint16_t kp_tmp, kd_tmp, pos_tmp, vel_tmp, torque_tmp;
 
     if (motors[i]->GetMode() == MIT) {
       // converting float to unsigned int before transmitting
@@ -963,46 +974,46 @@ void Motor4310::MotorEnable() {
   }
 }
 
-    void Motor4310::UpdateData(const uint8_t data[]) {
-      raw_pos_ = data[1] << 8 | data[2];
-      raw_vel_ = data[3] << 4 | (data[4] & 0xf0) >> 4;
-      raw_torque_ = data[5] | (data[4] & 0x0f) << 8;
-      raw_mosTemp_ = data[6];
-      raw_motorTemp_ = data[7];
+void Motor4310::UpdateData(const uint8_t data[]) {
+  raw_pos_ = data[1] << 8 | data[2];
+  raw_vel_ = data[3] << 4 | (data[4] & 0xf0) >> 4;
+  raw_torque_ = data[5] | (data[4] & 0x0f) << 8;
+  raw_mosTemp_ = data[6];
+  raw_motorTemp_ = data[7];
 
   theta_ = wrap<float>(uint_to_float(raw_pos_, P_MIN, P_MAX, 16), P_MIN, P_MAX);
   omega_ = uint_to_float(raw_vel_, V_MIN, V_MAX, 12);
   torque_ = uint_to_float(raw_torque_, T_MIN, T_MAX, 12);
 
-      connection_flag_ = true;
-    }
+  connection_flag_ = true;
+}
 
-    void Motor4310::PrintData() {
-      set_cursor(0, 0);
-      clear_screen();
-      print("Position: % .4f ", GetTheta());
-      print("Velocity: % .4f ", GetOmega());
-      print("Torque: % .4f ", GetTorque());
-      print("Rotor temp: % .4f \r\n", raw_motorTemp_);
-    }
+void Motor4310::PrintData() {
+  set_cursor(0, 0);
+  clear_screen();
+  print("Position: % .4f ", GetTheta());
+  print("Velocity: % .4f ", GetOmega());
+  print("Torque: % .4f ", GetTorque());
+  print("Rotor temp: % .4f \r\n", raw_motorTemp_);
+}
 
-    float Motor4310::GetTheta() const {
-      return theta_;
-    }
+float Motor4310::GetTheta() const {
+  return theta_;
+}
 
-    float Motor4310::GetOmega() const {
-      return omega_;
-    }
-    float Motor4310::GetTorque() const {
-      return torque_;
-    }
+float Motor4310::GetOmega() const {
+  return omega_;
+}
+float Motor4310::GetTorque() const {
+  return torque_;
+}
 
-    float Motor4310::GetRelativeTarget() const{
-      return relative_target_;
-    }
+float Motor4310::GetRelativeTarget() const {
+  return relative_target_;
+}
 
-    void Motor4310::SetRelativeTarget(float target) {
-      relative_target_ = target;
-    }
+void Motor4310::SetRelativeTarget(float target) {
+  relative_target_ = target;
+}
 
 } /* namespace control */

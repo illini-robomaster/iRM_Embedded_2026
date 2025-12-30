@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "bsp_can.h"
+#include "bsp_can_bridge.h"
 #include "bsp_pwm.h"
 #include "controller.h"
 #include "utils.h"
@@ -304,64 +304,131 @@ namespace control {
 //==================================================================================================
 
 /**
- * @brief PWM motor base class
+ * @brief PWM motor base class for ESCs and servos
+ *
+ * This class provides basic PWM control for motors that use pulse-width modulation.
+ * The SetOutput() method adds an offset to the idle_throttle to get the final pulse width.
+ *
+ * For ESCs: idle_throttle is typically 1000-1100µs (armed but not spinning)
+ * For Servos: idle_throttle is typically 1500µs (center position)
  */
-    class MotorPWMBase : public MotorBase {
-    public:
-        /**
-         * @brief constructor
-         *
-         * @param htim           HAL timer handle
-         * @param channel        HAL timer channel, from [0, 4)
-         * @param clock_freq     clock frequency associated with the timer, in [Hz]
-         * @param output_freq    desired output frequency, in [Hz]
-         * @param idle_throttle  idling pulse width, in [us]
-         *
-         * @note M3508 have idle_throttle about 1500, snail have idle_throttle about 1100
-         */
-        MotorPWMBase(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq, uint32_t output_freq,
-                     uint32_t idle_throttle);
+class MotorPWMBase : public MotorBase {
+ public:
+  /**
+   * @brief constructor
+   *
+   * @param htim           HAL timer handle
+   * @param channel        HAL timer channel, from [1, 4]
+   * @param clock_freq     clock frequency associated with the timer, in [Hz]
+   * @param output_freq    desired output frequency, in [Hz] (typically 50Hz for servo/ESC)
+   * @param idle_throttle  idling pulse width, in [µs]
+   *
+   * @note For ESCs: idle_throttle ~1100µs
+   * @note For Servos: idle_throttle ~1500µs (center position)
+   */
+  MotorPWMBase(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq, uint32_t output_freq,
+               uint32_t idle_throttle);
 
-        /**
-         * @brief set and transmit output
-         *
-         * @param val offset value with respect to the idle throttle pulse width, in [us]
-         */
-        virtual void SetOutput(int16_t val) override;
+  /**
+   * @brief set output as offset from idle throttle
+   *
+   * @param val offset value with respect to the idle throttle pulse width, in [µs]
+   *            Final pulse width = idle_throttle + val
+   */
+  virtual void SetOutput(int16_t val) override;
 
-    private:
-        bsp::PWM pwm_;
-        uint32_t idle_throttle_;
-    };
+ protected:
+  bsp::PWM pwm_;
+  uint32_t idle_throttle_;
+};
 
 //==================================================================================================
-// PDIHV
+// PDIHV Servo
 //==================================================================================================
 
 /**
- * @brief Hero Trigger servo
+ * @brief PDI-HV High Voltage Digital Servo
+ *
+ * Specifications:
+ *   - Pulse width range: 972 - 1947 µs
+ *   - Angle range: -80° to +80° (160° total)
+ *   - Center position: ~1470 µs (0°)
+ *
+ * Usage example:
+ * @code
+ *   // Create servo on TIM1 CH3, 9.6MHz clock, 50Hz output
+ *   PDIHV servo(&htim1, 3, 9600000, 50, 1470);
+ *
+ *   // Control by angle (recommended)
+ *   servo.SetOutputAngle(0);     // Center
+ *   servo.SetOutputAngle(-45);   // Turn left 45°
+ *   servo.SetOutputAngle(45);    // Turn right 45°
+ *
+ *   // Or control by pulse width directly
+ *   servo.SetOutput(1470);       // Center (1470µs)
+ * @endcode
  */
-    class PDIHV : public MotorPWMBase {
-    public:
-        PDIHV(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq, uint32_t output_freq,
-              uint32_t idle_throttle);
-        /* override base implementation with max angle */
-        void SetOutPutAngle(float deg);
-        void SetOutput(int16_t val) override final;
-    };
+class PDIHV : public MotorPWMBase {
+ public:
+  PDIHV(TIM_HandleTypeDef* htim, uint8_t channel, uint32_t clock_freq, uint32_t output_freq,
+        uint32_t idle_throttle);
+
+  /**
+   * @brief Set servo position by angle
+   * @param degree Angle in degrees, range: -80° to +80°
+   */
+  void SetOutputAngle(float degree);
+
+  /**
+   * @brief Set servo position by pulse width
+   * @param val Pulse width in µs, range: 972 - 1947 µs
+   * @note This sets the absolute pulse width, NOT an offset
+   */
+  void SetOutput(int16_t val) override final;
+};
 
 //==================================================================================================
-// Motor2305
+// Motor2305 (DJI Snail ESC)
 //==================================================================================================
 
 /**
- * @brief DJI snail 2305 motor class
+ * @brief DJI Snail 2305 Brushless Motor with ESC
+ *
+ * Specifications:
+ *   - Idle throttle: ~1100 µs (armed but not spinning)
+ *   - Throttle offset range: 0 - 700 µs
+ *   - Full pulse range: 1100 - 1800 µs
+ *
+ * Usage example:
+ * @code
+ *   // Create motor on TIM1 CH1, 9.6MHz clock, 50Hz output, 1100µs idle
+ *   Motor2305 motor(&htim1, 1, 9600000, 50, 1100);
+ *
+ *   // Control by throttle percentage (recommended)
+ *   motor.SetThrottle(0);      // 0% - motor stopped
+ *   motor.SetThrottle(50);     // 50% throttle
+ *   motor.SetThrottle(100);    // 100% full throttle
+ *
+ *   // Or control by offset from idle
+ *   motor.SetOutput(0);        // 0 offset = idle (1100µs)
+ *   motor.SetOutput(350);      // 50% = 1100 + 350 = 1450µs
+ *   motor.SetOutput(700);      // 100% = 1100 + 700 = 1800µs
+ * @endcode
  */
-    class Motor2305 : public MotorPWMBase {
-    public:
-        /* override base implementation with max current protection */
-        void SetOutput(int16_t val) override final;
-    };
+class Motor2305 : public MotorPWMBase {
+ public:
+  /**
+   * @brief Set throttle as offset from idle
+   * @param val Offset in µs, range: 0 - 700
+   */
+  void SetOutput(int16_t val) override final;
+
+  /**
+   * @brief Set throttle by percentage
+   * @param percent Throttle percentage, range: 0% - 100%
+   */
+  void SetThrottle(float percent);
+};
 
 
 

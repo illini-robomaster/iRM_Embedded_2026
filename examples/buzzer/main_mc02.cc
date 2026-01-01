@@ -94,7 +94,7 @@ static bsp::BuzzerNoteDelayed War_Cant_of_Mars[] = {
     {Note::Finish, 0},
 };
 
-static bsp::BuzzerNoteDelayed Imperial_March[] = {
+static bsp::BuzzerNoteDelayed StarWarTheme[] = {
     {Note::NOTE_AS4, 250},
     {Note::NOTE_AS4, 250},
     {Note::NOTE_AS4, 250},  // 1
@@ -190,7 +190,7 @@ static bsp::BuzzerNoteDelayed Imperial_March[] = {
 void RM_RTOS_Init(void) {
   UNUSED(Mario);
   UNUSED(War_Cant_of_Mars);
-  UNUSED(Imperial_March);
+  UNUSED(StarWarTheme);
   UNUSED(TestScale);
 
   buzzer = new bsp::Buzzer(&htim12, 2, BUZZER_CLOCK_FREQ);
@@ -204,12 +204,11 @@ void RM_RTOS_Default_Task(const void* arguments) {
 
   // Play songs in loop using osDelay (recommended for multi-note melodies)
   while (true) {
-    buzzer->SingSong(Mario, [](uint32_t ms) { osDelay(ms); });
-    osDelay(2000);  // Pause between songs
-
-    // Uncomment to play other songs:
     // buzzer->SingSong(Mario, [](uint32_t ms) { osDelay(ms); });
-    // osDelay(2000);
+    // osDelay(2000);  // Pause between songs
+    buzzer->SingSong(StarWarTheme, [](uint32_t ms) { osDelay(ms); });
+    osDelay(2000);
+    // Uncomment to play other songs:
     // buzzer->SingSong(War_Cant_of_Mars, [](uint32_t ms) { osDelay(ms); });
     // osDelay(2000);
   }

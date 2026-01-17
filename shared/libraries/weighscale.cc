@@ -18,6 +18,10 @@
  *                                                                          *
  ****************************************************************************/
 
+/*
+ * This is the implementation file for LT-LJ-S weight scale transmitter library.
+ * It provides functions to communicate with the weighing scale device over CAN bus.
+ */
 #include "weighscale.h"
 
 #include <cstring>
@@ -307,7 +311,8 @@ uint32_t WeighScaleBaudCodeToBps(WeighScaleBaudCode code) {
     case WeighScaleBaudCode::BAUD_20K:  return 20000;
     case WeighScaleBaudCode::BAUD_50K:  return 50000;
     case WeighScaleBaudCode::BAUD_100K: return 100000;
-    case WeighScaleBaudCode::BAUD_120K: return 120000;
+    case WeighScaleBaudCode::BAUD_125K:
+      return 125000;  // Fixed: was incorrectly 120000
     case WeighScaleBaudCode::BAUD_200K: return 200000;
     case WeighScaleBaudCode::BAUD_250K: return 250000;
     case WeighScaleBaudCode::BAUD_400K: return 400000;
@@ -323,7 +328,8 @@ WeighScaleBaudCode WeighScaleBpsToBaudCode(uint32_t bps) {
     case 20000:   return WeighScaleBaudCode::BAUD_20K;
     case 50000:   return WeighScaleBaudCode::BAUD_50K;
     case 100000:  return WeighScaleBaudCode::BAUD_100K;
-    case 120000:  return WeighScaleBaudCode::BAUD_120K;
+    case 125000:
+      return WeighScaleBaudCode::BAUD_125K;  // Fixed: was incorrectly 120000
     case 200000:  return WeighScaleBaudCode::BAUD_200K;
     case 250000:  return WeighScaleBaudCode::BAUD_250K;
     case 400000:  return WeighScaleBaudCode::BAUD_400K;

@@ -44,24 +44,26 @@ static bsp::GPIO* key = nullptr;
 
 // Callback to handle weight response frames
 // Response IDs: 0x302 (ch1,2), 0x303 (ch3,4), etc.
+// Per protocol spec: weight values are int32 (two's complement), big-endian
 static void weight_callback(const uint8_t data[], void* args) {
   UNUSED(args);
-  // Parse two channels from each frame (big-endian uint32)
-  // The callback ID tells us which channels these are
-  // For simplicity, this example stores to global weight_data
-  
-  // Parse channel N weight (bytes 0-3)
-  uint32_t weight1 = (static_cast<uint32_t>(data[0]) << 24) |
-                     (static_cast<uint32_t>(data[1]) << 16) |
-                     (static_cast<uint32_t>(data[2]) << 8) |
-                     static_cast<uint32_t>(data[3]);
-  
-  // Parse channel N+1 weight (bytes 4-7)
-  uint32_t weight2 = (static_cast<uint32_t>(data[4]) << 24) |
-                     (static_cast<uint32_t>(data[5]) << 16) |
-                     (static_cast<uint32_t>(data[6]) << 8) |
-                     static_cast<uint32_t>(data[7]);
-  
+  // Parse two channels from each frame (big-endian int32)
+  // Per protocol spec Section 2.2: device returns two's complement negative values
+
+  // Parse channel N weight (bytes 0-3) as int32_t
+  int32_t weight1 = static_cast<int32_t>(
+      (static_cast<uint32_t>(data[0]) << 24) |
+      (static_cast<uint32_t>(data[1]) << 16) |
+      (static_cast<uint32_t>(data[2]) << 8) |
+      static_cast<uint32_t>(data[3]));
+
+  // Parse channel N+1 weight (bytes 4-7) as int32_t
+  int32_t weight2 = static_cast<int32_t>(
+      (static_cast<uint32_t>(data[4]) << 24) |
+      (static_cast<uint32_t>(data[5]) << 16) |
+      (static_cast<uint32_t>(data[6]) << 8) |
+      static_cast<uint32_t>(data[7]));
+
   // Store weights - actual channel mapping depends on response ID
   // This is a simplified example
   static uint8_t frame_count = 0;
@@ -152,7 +154,8 @@ void RM_RTOS_Default_Task(const void* arguments) {
       
       print("=== Weight Readings (g) ===\r\n");
       for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-        print("CH%d: %lu g\r\n", ch + 1, weight_data.weight[ch]);
+        // Use %ld for int32_t (signed) per protocol spec
+        print("CH%d: %ld g\r\n", ch + 1, static_cast<long>(weight_data.weight[ch]));
       }
       print("\r\n");
       print("Connection: %s\r\n", scale->connection_flag_ ? "OK" : "---");

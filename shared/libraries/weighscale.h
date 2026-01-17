@@ -49,13 +49,13 @@ enum class WeighScaleBaudCode : uint8_t {
   BAUD_20K = 0x02,
   BAUD_50K = 0x03,
   BAUD_100K = 0x04,
-  BAUD_120K = 0x05,
+  BAUD_125K = 0x05,  // Per protocol spec: 0x05 = 125 kbps
   BAUD_200K = 0x06,
   BAUD_250K = 0x07,
   BAUD_400K = 0x08,
   BAUD_500K = 0x09,
   BAUD_800K = 0x0A,
-  BAUD_1M = 0x0B    // Default (1Mbps)
+  BAUD_1M = 0x0B  // Default (1Mbps)
 };
 
 /**
@@ -99,9 +99,10 @@ enum class WeighScaleSampleCmd : uint8_t {
 
 /**
  * @brief Weight data for all channels
+ * @note Weight values are int32 (two's complement) per actual device behavior
  */
 typedef struct {
-  uint32_t weight[WEIGHSCALE_MAX_CHANNELS];  // Weight in grams (uint32)
+  int32_t weight[WEIGHSCALE_MAX_CHANNELS];    // Weight in grams (int32, supports negative values)
   uint8_t valid_channels;                     // Number of valid channels received
 } __packed WeighScaleData_t;
 

@@ -23,3 +23,13 @@ project(example_buzzer ASM C CXX)
 irm_add_arm_executable(${PROJECT_NAME}
     TARGET DJI_Board_TypeC
     SOURCES main.cc)
+
+# DM-MC-02: Buzzer on TIM12_CH2 (PB15)
+irm_add_arm_executable(${PROJECT_NAME}_mc02
+    TARGET DM_MC_02
+    SOURCES main_mc02.cc)
+
+# DM-MC-02: Raw register test
+irm_add_arm_executable(${PROJECT_NAME}_mc02_raw
+    TARGET DM_MC_02
+    SOURCES buzzer_raw_test.cc)

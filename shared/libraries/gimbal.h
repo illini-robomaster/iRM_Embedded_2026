@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "can.h"
+#include "bsp_can_bridge.h"
 #include "controller.h"
 #include "motor.h"
 #include "utils.h"

@@ -17,6 +17,38 @@
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.    *
  *                                                                          *
  ****************************************************************************/
+/*
+ * ============================================================================
+ *                        DBUS Channel Mapping
+ * ============================================================================
+ *
+ *     ┌───────────────────────────────────────────────────────────────┐
+ *     │   (S1)                                           (S2)         │
+ *     │    ○                                              ○           │
+ *     │                                                               │
+ *     │        ▲                                    ▲                 │
+ *     │        │ CH3                                │ CH1             │
+ *     │        │ (+)                                │ (+)             │
+ *     │   ◄────┼────►  CH2                     ◄────┼────►  CH0       │
+ *     │   (-)  │  (+)                          (-)  │  (+)            │
+ *     │        │                                    │                 │
+ *     │        ▼ (-)                                ▼ (-)             │
+ *     │      Left                                 Right               │
+ *     │                                                               │
+ *     └───────────────────────────────────────────────────────────────┘
+ *
+ * Joystick Channel Description:
+ * - CH0: Right Joystick Left/Right  (Left Negative, Right Positive, Range -660 ~ +660)
+ * - CH1: Right Joystick Up/Down     (Down Negative, Up Positive, Range -660 ~ +660)
+ * - CH2: Left Joystick Left/Right   (Left Negative, Right Positive, Range -660 ~ +660)
+ * - CH3: Left Joystick Up/Down      (Down Negative, Up Positive, Range -660 ~ +660)
+ *
+ * Switch Description:
+ *   - S1 (SWL): Left Top Three-Position Switch
+ *   - S2 (SWR): Right Top Three-Position Switch
+ *   - Positions: UP = 1, DOWN = 2, MID = 3
+ *
+ */
 
 #include "main.h"
 

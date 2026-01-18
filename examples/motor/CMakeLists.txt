@@ -69,7 +69,7 @@ irm_add_arm_executable(${PROJECT_NAME}_dm3519_vel
         SOURCES dm3519_vel.cc)
 
 irm_add_arm_executable(${PROJECT_NAME}_m4310_mit
-        TARGET DJI_Board_TypeC
+        TARGET DM_MC_01 
         SOURCES m4310_mit.cc)
 
 irm_add_arm_executable(${PROJECT_NAME}_m4310_pos_vel
@@ -88,6 +88,7 @@ irm_add_arm_executable(${PROJECT_NAME}_m3510_PID
         TARGET DJI_Board_TypeC
         SOURCES m3510_PID.cc)
         
+
 irm_add_arm_executable(${PROJECT_NAME}_HERO_SERVO
         TARGET DJI_Board_TypeC
         SOURCES HERO_SERVO.cc)
@@ -95,3 +96,8 @@ irm_add_arm_executable(${PROJECT_NAME}_HERO_SERVO
 irm_add_arm_executable(${PROJECT_NAME}_can_raw_transmit
         TARGET DJI_Board_TypeA
         SOURCES can_raw_transmit.cc)
+
+# DM_MC_02 board examples (using FDCAN)
+irm_add_arm_executable(${PROJECT_NAME}_m3508_mc02
+        TARGET DM_MC_02
+        SOURCES m3508_mc02.cc)

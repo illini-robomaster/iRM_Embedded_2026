@@ -20,9 +20,9 @@
 
 #include "main.h"
 
+#include <cstring>
 #include <memory>
 
-#include "bsp_print.h"
 #include "bsp_uart.h"
 #include "cmsis_os.h"
 
@@ -63,19 +63,25 @@ void RM_RTOS_Default_Task(const void* argument) {
   uint32_t length;
   uint8_t* data;
 
-  auto uart = std::make_unique<CustomUART>(&UART_HANDLE);  // see cmake for which uart
+  auto uart = std::make_unique<CustomUART>(&UART_HANDLE);
   uart->SetupRx(50);
   uart->SetupTx(50);
+
+  // Debug: send a startup message using HAL directly
+  const char* startup_msg = "UART Example Started\r\n";
+
+  uart->Write((const uint8_t*)startup_msg, strlen(startup_msg));
 
   while (true) {
     /* wait until rx data is available */
     uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
-    if (flags & RX_SIGNAL) {  // unnecessary check
-      /* time the non-blocking rx / tx calls (should be <= 1 osTick) */
+    if (flags & RX_SIGNAL) {
       length = uart->Read(&data);
+      // data read from uart, basically hearing from keyboard
       uart->Write(data, length);
       uart->Write(data, length);
       uart->Write(data, length);
+      // data written to uart, echos three times
     }
   }
 }

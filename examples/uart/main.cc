@@ -20,29 +20,11 @@
 
 #include "main.h"
 
-#include <cstring>
 #include <memory>
 
+#include "bsp_print.h"
 #include "bsp_uart.h"
 #include "cmsis_os.h"
-
-/**
- * sample client Python code to verify transmission correctness of this example program
- *
- * ```
- * import serial
- *
- * ser = serial.Serial('/dev/ttyUSB0', baudrate=115200)
- * some_str = 'this is my data!'
- *
- * for i in range(1000):
- *     ser.write(some_str)
- *     while ser.in_waiting < 3 * len(some_str):
- *         continue
- *     ret = ser.read_all()
- *     assert ret == 3 * some_str
- * ```
- */
 
 #define RX_SIGNAL (1 << 0)
 
@@ -53,35 +35,47 @@ class CustomUART : public bsp::UART {
   using bsp::UART::UART;
 
  protected:
-  /* notify application when rx data is pending read */
-  void RxCompleteCallback() override final { osThreadFlagsSet(defaultTaskHandle, RX_SIGNAL); }
+  void RxCompleteCallback() override final {
+    osThreadFlagsSet(defaultTaskHandle, RX_SIGNAL);
+  }
 };
+
+void RM_RTOS_Init(void) {
+  print_use_usb();
+}
 
 void RM_RTOS_Default_Task(const void* argument) {
   UNUSED(argument);
+  // Wait for USB CDC to enumerate with host PC
+  osDelay(3000);
 
   uint32_t length;
   uint8_t* data;
 
+  print("USB Print Test Started\r\n");
+
   auto uart = std::make_unique<CustomUART>(&UART_HANDLE);
-  uart->SetupRx(50);
   uart->SetupTx(50);
-
-  // Debug: send a startup message using HAL directly
-  const char* startup_msg = "UART Example Started\r\n";
-
-  uart->Write((const uint8_t*)startup_msg, strlen(startup_msg));
+  uart->SetupRx(50);
+  print("UART initialized - ready to receive data\r\n");
 
   while (true) {
-    /* wait until rx data is available */
-    uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
+    // Wait for RX signal with 1 second timeout
+    uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, 1000);
+
     if (flags & RX_SIGNAL) {
+      // Data received on UART
       length = uart->Read(&data);
-      // data read from uart, basically hearing from keyboard
+      print("Received %lu bytes from UART\r\n", length);
+
+      // Echo back 3 times
       uart->Write(data, length);
       uart->Write(data, length);
       uart->Write(data, length);
-      // data written to uart, echos three times
+      print("Echoed data 3 times\r\n");
+    } else {
+      // Timeout - print status
+      print("Waiting for UART data...\r\n");
     }
   }
 }

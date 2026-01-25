@@ -19,6 +19,7 @@
  ****************************************************************************/
 
 #include "bsp_print.h"
+#include "bsp_fdcan.h"
 #include "cmsis_os.h"
 #include "main.h"
 #include "motor.h"

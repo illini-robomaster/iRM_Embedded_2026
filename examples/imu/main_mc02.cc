@@ -90,7 +90,7 @@ static IMU_ACCEL_INT* accel_int = nullptr;
 
 void RM_RTOS_Init(void) {
     // Use UART7 for debug output (PE7=RX, PE8=TX)
-    print_use_uart(&huart7);
+    print_use_usb();
     
     // Create interrupt handlers
     gyro_int = new IMU_GYRO_INT();

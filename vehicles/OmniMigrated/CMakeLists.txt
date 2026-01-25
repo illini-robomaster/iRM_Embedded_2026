@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------- #
 #                                                                        #
-#  Copyright (C) 2022                                                    #
+#  Copyright (C) 2025                                                    #
 #  Illini RoboMaster @ University of Illinois at Urbana-Champaign.       #
 #                                                                        #
 #  This program is free software: you can redistribute it and/or modify  #
@@ -18,11 +18,8 @@
 #                                                                        #
 # ---------------------------------------------------------------------- #
 
-add_subdirectory(Engineer)
-add_subdirectory(Fortress)
-add_subdirectory(Sentry)
-add_subdirectory(Steering)
-add_subdirectory(Hero)
-add_subdirectory(Dart)
-add_subdirectory(Omni)
-add_subdirectory(OmniMigrated)
+project(vehicle_omni_migrated ASM C CXX)
+
+irm_add_arm_executable(${PROJECT_NAME}
+    TARGET DM_MC_02
+    SOURCES main.cc)

@@ -24,6 +24,6 @@ irm_add_arm_executable(${PROJECT_NAME}
     TARGET DJI_Board_TypeC
     SOURCES main.cc)
 
-irm_add_arm_executable(${PROJECT_NAME}
+irm_add_arm_executable(${PROJECT_NAME}_mc02
     TARGET DM_MC_02
     SOURCES main_mc02.cc)

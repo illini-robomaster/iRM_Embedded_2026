@@ -68,6 +68,8 @@ void RM_RTOS_Threads_Init(void) {
 
 bsp::CAN* can = nullptr;
 control::MotorDM3519* motor[4];
+control::Motor3508* flywheel_motor[2];
+control::Motor3508* feeder_motor;
 control::Motor6020* yaw_motor;
 control::Motor4310* pitch_motor;
 remote::DBUS* dbus = nullptr;
@@ -91,13 +93,18 @@ void RM_RTOS_Init() {
    *  VEL: velocity mode  */
 
   /* Make sure motor is set to the correct mode (in helper tool). Otherwise, motor won't start */
-  motor[0] = new control::MotorDM3519(can, 0x00, 0x01, control::VEL); // front right
-  motor[1] = new control::MotorDM3519(can, 0x02, 0x03, control::VEL); // back left
-  motor[2] = new control::MotorDM3519(can, 0x08, 0x09, control::VEL); // back right
-  motor[3] = new control::MotorDM3519(can, 0x06, 0x07, control::VEL); // front left
+  motor[0] = new control::MotorDM3519(can, 0x10, 0x11, control::VEL); // front right
+  motor[1] = new control::MotorDM3519(can, 0x12, 0x13, control::VEL); // back left
+  motor[2] = new control::MotorDM3519(can, 0x18, 0x19, control::VEL); // back right
+  motor[3] = new control::MotorDM3519(can, 0x16, 0x17, control::VEL); // front left
   yaw_motor = new control::Motor6020(can, 0x205);
   pitch_motor = new control::Motor4310(can, 0x0D, 0x0C, control::MIT);
   dbus = new remote::DBUS(&huart3);
+
+  // shooter
+  flywheel_motor[0] = new control::Motor3508(can, 0x207); // left flywheel
+  flywheel_motor[1] = new control::Motor3508(can, 0x208); // right flywheel
+  feeder_motor = new control::Motor3508(can, 0x206);
 
   // IMU initialization
   bsp::IST8310_init_t IST8310_init;
@@ -134,8 +141,13 @@ void RM_RTOS_Default_Task(const void* args) {
 
   control::MotorDM3519* motors[] = {motor[0], motor[1], motor[2], motor[3]};
   control::Motor4310* pitch_motors[] = {pitch_motor};
+  control::MotorCANBase* dji_motors[] = {yaw_motor, feeder_motor, flywheel_motor[0], flywheel_motor[1]};
   float pid_params[3] = {20000.0, 1.0, 10.0};
   control::ConstrainedPID pid_(pid_params, 30000, 30000);
+
+  control::PIDController left_flywheel_pid_(40.0, 15.0, 30.0);
+  control::PIDController right_flywheel_pid_(40.0, 15.0, 30.0);
+  control::PIDController feeder_pid_(40.0, 5.0, 10.0);
 
   while(dbus->swr != remote::DOWN){}  // flip swr to start
 
@@ -156,12 +168,22 @@ void RM_RTOS_Default_Task(const void* args) {
   float pitch_physical = pitch_motor->GetTheta() + PITCH_PHYSICAL_OFFSET;
   osDelay(100);
 
-  bool enabled = true;
+  bool enabled = false;
+  bool flywheel_enabled = false;
   float yaw_target = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
   int16_t command;
   float gimbal_yaw_measured_in_field_reference = 0.0f;
 
+  float left_target_velocity = 0;
+  float right_target_velocity = 0;
+  float feeder_target_velocity = 0;
+
   while (true) {
+
+
+    set_cursor(0, 0);
+    clear_screen();
+
 
     // disable logic
     if(dbus->swr != remote::DOWN){
@@ -171,6 +193,11 @@ void RM_RTOS_Default_Task(const void* args) {
         motor[2]->MotorDisable();
         motor[3]->MotorDisable();  
         pitch_motor->MotorDisable();
+        left_target_velocity = 0;
+        right_target_velocity = 0;
+        feeder_target_velocity = 0;
+        pitch_physical = PITCH_PHYSICAL_OFFSET;
+        osDelay(100);
         enabled = false;
       }
       osDelay(100);
@@ -182,9 +209,47 @@ void RM_RTOS_Default_Task(const void* args) {
         motor[2]->MotorEnable();
         motor[3]->MotorEnable();
         pitch_motor->MotorEnable();
+        osDelay(100);
+        flywheel_enabled = !flywheel_enabled;
+        if(flywheel_enabled){
+          left_target_velocity = -900;
+          right_target_velocity = 900;
+        }else{
+          left_target_velocity = 0;
+          right_target_velocity = 0;
+        }
         enabled = true;
       }
     }
+
+    if(dbus->swl == remote::DOWN){
+      feeder_target_velocity = 80.0f;
+    }else{
+      feeder_target_velocity = 0.0f;
+    }
+
+    // shooter
+
+    float left_diff = flywheel_motor[0]->GetOmegaDelta(left_target_velocity);
+    float right_diff = flywheel_motor[1]->GetOmegaDelta(right_target_velocity);
+    float feeder_diff = feeder_motor->GetOmegaDelta(feeder_target_velocity);
+    int16_t left_output = left_flywheel_pid_.ComputeConstrainedOutput(left_diff);
+    int16_t right_output = right_flywheel_pid_.ComputeConstrainedOutput(right_diff);
+    int16_t feeder_output = feeder_pid_.ComputeConstrainedOutput(feeder_diff);
+
+    if (left_target_velocity == 0) left_output = 0;
+    if (right_target_velocity == 0) right_output = 0;
+    if (feeder_target_velocity == 0) feeder_output = 0;
+    // UNUSED(feeder_output);
+    flywheel_motor[0]->SetOutput(left_output);
+    flywheel_motor[1]->SetOutput(right_output);
+    feeder_motor->SetOutput(feeder_output);
+    // print("LFT: %.2f, RFT: %.2f, FET: %.2f\r\n", left_target_velocity, right_target_velocity, feeder_target_velocity);
+    // print("LD: %.2f, RD: %.2f, FD: %.2f, \r\n", left_diff, right_diff, feeder_diff);
+    // print("LF: %d RF: %d F: %d\r\n", left_output, right_output, feeder_output);
+    print("L: %.2f R: %.2f F: %.2f\r\n", flywheel_motor[0]->GetOmega(), flywheel_motor[1]->GetOmega(), feeder_motor->GetOmega());
+
+    // chassis
     gimbal_yaw_measured_in_field_reference = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
 
     float vel[4];
@@ -226,8 +291,6 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[2] = -alpha + chassis_yaw_omega_target;
     vel[3] = alpha + chassis_yaw_omega_target;
 
-    set_cursor(0, 0);
-    clear_screen();
 
     print("g_f: %.2f c_f: %.2f \r\n", gimbal_yaw_measured_in_field_reference, chasis_yaw_measured_in_field_reference);
     UNUSED(command);
@@ -241,9 +304,9 @@ void RM_RTOS_Default_Task(const void* args) {
     float pitch_rotor = pitch_physical - PITCH_PHYSICAL_OFFSET;
     pitch_motor->SetOutput(pitch_rotor, pitch_omega, 30, 0.5, 0);
     control::MotorDM3519::TransmitOutput(motors, 4);
-    control::Motor6020::TransmitOutput((control::MotorCANBase**)(&yaw_motor), 1);
+    // control::Motor6020::TransmitOutput((control::MotorCANBase**)(&yaw_motor), 1);
     control::Motor4310::TransmitOutput(pitch_motors, 1);
-    // after transmit, DM's motors return their data
+    control::Motor3508::TransmitOutput(dji_motors, 4);
     osDelay(10);
   }
 }

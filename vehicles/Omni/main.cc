@@ -149,7 +149,7 @@ void RM_RTOS_Default_Task(const void* args) {
   control::PIDController right_flywheel_pid_(40.0, 15.0, 30.0);
   control::PIDController feeder_pid_(40.0, 5.0, 10.0);
 
-  while(dbus->swr != remote::DOWN){}  // flip swr to start
+  while(dbus->swr == remote::DOWN){}  // flip swr to start
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
@@ -186,19 +186,22 @@ void RM_RTOS_Default_Task(const void* args) {
 
 
     // disable logic
-    if(dbus->swr != remote::DOWN){
+    if(dbus->swr == remote::DOWN){
       if(enabled){
         motor[0]->MotorDisable();
         motor[1]->MotorDisable();
         motor[2]->MotorDisable();
         motor[3]->MotorDisable();  
+
+        // disable gimbal motors
         pitch_motor->MotorDisable();
+        pitch_physical = PITCH_PHYSICAL_OFFSET;
+        enabled = false;
+
+        // disable flywheel
         left_target_velocity = 0;
         right_target_velocity = 0;
         feeder_target_velocity = 0;
-        pitch_physical = PITCH_PHYSICAL_OFFSET;
-        osDelay(100);
-        enabled = false;
       }
       osDelay(100);
       continue;
@@ -210,15 +213,21 @@ void RM_RTOS_Default_Task(const void* args) {
         motor[3]->MotorEnable();
         pitch_motor->MotorEnable();
         osDelay(100);
-        flywheel_enabled = !flywheel_enabled;
-        if(flywheel_enabled){
+        enabled = true;
+      }
+
+      if(dbus->swr == remote::UP){
+        if(!flywheel_enabled){ // enable flywheel if right switch is UP
           left_target_velocity = -900;
           right_target_velocity = 900;
-        }else{
+          flywheel_enabled = true;
+        }
+      }else{ // MID
+        if(flywheel_enabled){ // disable flywheel if right switch is MID
           left_target_velocity = 0;
           right_target_velocity = 0;
+          flywheel_enabled = false;
         }
-        enabled = true;
       }
     }
 
@@ -237,17 +246,11 @@ void RM_RTOS_Default_Task(const void* args) {
     int16_t right_output = right_flywheel_pid_.ComputeConstrainedOutput(right_diff);
     int16_t feeder_output = feeder_pid_.ComputeConstrainedOutput(feeder_diff);
 
-    if (left_target_velocity == 0) left_output = 0;
-    if (right_target_velocity == 0) right_output = 0;
-    if (feeder_target_velocity == 0) feeder_output = 0;
-    // UNUSED(feeder_output);
     flywheel_motor[0]->SetOutput(left_output);
     flywheel_motor[1]->SetOutput(right_output);
     feeder_motor->SetOutput(feeder_output);
-    // print("LFT: %.2f, RFT: %.2f, FET: %.2f\r\n", left_target_velocity, right_target_velocity, feeder_target_velocity);
-    // print("LD: %.2f, RD: %.2f, FD: %.2f, \r\n", left_diff, right_diff, feeder_diff);
-    // print("LF: %d RF: %d F: %d\r\n", left_output, right_output, feeder_output);
     print("L: %.2f R: %.2f F: %.2f\r\n", flywheel_motor[0]->GetOmega(), flywheel_motor[1]->GetOmega(), feeder_motor->GetOmega());
+    print("dial: %d\r\n", dbus->wheel);
 
     // chassis
     gimbal_yaw_measured_in_field_reference = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
@@ -292,7 +295,7 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[3] = alpha + chassis_yaw_omega_target;
 
 
-    print("g_f: %.2f c_f: %.2f \r\n", gimbal_yaw_measured_in_field_reference, chasis_yaw_measured_in_field_reference);
+    // print("g_f: %.2f c_f: %.2f \r\n", gimbal_yaw_measured_in_field_reference, chasis_yaw_measured_in_field_reference);
     UNUSED(command);
     motor[0]->SetOutput(vel[0]);
     motor[1]->SetOutput(vel[1]);

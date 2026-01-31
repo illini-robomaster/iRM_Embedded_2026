@@ -77,7 +77,7 @@ remote::DBUS* dbus = nullptr;
 float original_max_output_vel_rad_per_s = 395/60.0f*2*PI; //395 rpm = 41.36 rad/s
 float original_gear_ratio = 3591.0f/187.0f; 
 float new_gear_ratio = 268.0f/17.0f; 
-const float YAW_MOTOR_OFFSET = 4.54f; // in rad
+const float YAW_MOTOR_OFFSET = 4.23f; // 6020 motor encoder value when pointing forward (opposite of battery), in rad
 const float PITCH_PHYSICAL_OFFSET = 33.0f * PI / 180.0f; // 0 in encoder is 33 degrees in physical position, also physical maximum
 const float PITCH_PHYSICAL_MIN = -24.0f * PI / 180.0f; // -24 degrees in physical position
 
@@ -142,8 +142,7 @@ void RM_RTOS_Default_Task(const void* args) {
   control::MotorDM3519* motors[] = {motor[0], motor[1], motor[2], motor[3]};
   control::Motor4310* pitch_motors[] = {pitch_motor};
   control::MotorCANBase* dji_motors[] = {yaw_motor, feeder_motor, flywheel_motor[0], flywheel_motor[1]};
-  float pid_params[3] = {20000.0, 1.0, 10.0};
-  control::ConstrainedPID pid_(pid_params, 30000, 30000);
+  control::PIDController pid_(40000.0, 0.0, 300000.0);
 
   control::PIDController left_flywheel_pid_(40.0, 15.0, 30.0);
   control::PIDController right_flywheel_pid_(40.0, 15.0, 30.0);
@@ -171,7 +170,7 @@ void RM_RTOS_Default_Task(const void* args) {
   bool enabled = false;
   bool flywheel_enabled = false;
   float yaw_target = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
-  int16_t command;
+  int16_t yaw_feedback;
   float gimbal_yaw_measured_in_field_reference = 0.0f;
 
   float left_target_velocity = 0;
@@ -249,8 +248,8 @@ void RM_RTOS_Default_Task(const void* args) {
     flywheel_motor[0]->SetOutput(left_output);
     flywheel_motor[1]->SetOutput(right_output);
     feeder_motor->SetOutput(feeder_output);
-    print("L: %.2f R: %.2f F: %.2f\r\n", flywheel_motor[0]->GetOmega(), flywheel_motor[1]->GetOmega(), feeder_motor->GetOmega());
-    print("dial: %d\r\n", dbus->wheel);
+    // print("L: %.2f R: %.2f F: %.2f\r\n", flywheel_motor[0]->GetOmega(), flywheel_motor[1]->GetOmega(), feeder_motor->GetOmega());
+    // print("dial: %u \r\n", dbus->wheel.wheel);
 
     // chassis
     gimbal_yaw_measured_in_field_reference = imu->INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
@@ -261,7 +260,7 @@ void RM_RTOS_Default_Task(const void* args) {
     float x = clip<float>(dbus->ch1 / 660.0 * 30.0, -30, 30); // left
     float yaw_omega = clip<float>(-dbus->ch2 / 660.0 * 30.0, -30, 30); // yaw
     float pitch_omega = clip<float>(dbus->ch3 / 660.0 * 15.0, -15, 15); // pitch
-    yaw_target += yaw_omega * 0.01f; // yaw target in field reference rad * 10ms
+    yaw_target += yaw_omega * 0.003f; // yaw target in field reference rad * 10ms
     pitch_physical += pitch_omega /200;
     pitch_physical = clip<float>(pitch_physical, PITCH_PHYSICAL_MIN, PITCH_PHYSICAL_OFFSET);
 
@@ -269,7 +268,7 @@ void RM_RTOS_Default_Task(const void* args) {
     float cos = cosf(delta_yaw);
     float sin = sinf(delta_yaw);
     delta_yaw = atan2f(sin, cos); // wrap to [-pi, pi]
-    command = pid_.ComputeOutput(delta_yaw);
+    yaw_feedback = pid_.ComputeConstrainedOutput(delta_yaw);
 
     float chasis_yaw_measured_in_field_reference = gimbal_yaw_measured_in_field_reference - imu->INS_angle[0]; // in rad
 
@@ -295,14 +294,18 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[3] = alpha + chassis_yaw_omega_target;
 
 
-    // print("g_f: %.2f c_f: %.2f \r\n", gimbal_yaw_measured_in_field_reference, chasis_yaw_measured_in_field_reference);
-    UNUSED(command);
+    // print("g_f: %.2f c_f: %.2f motor_yaw: %.2f \r\n", gimbal_yaw_measured_in_field_reference, chasis_yaw_measured_in_field_reference, yaw_motor->GetTheta());
+    UNUSED(yaw_feedback);
     motor[0]->SetOutput(vel[0]);
     motor[1]->SetOutput(vel[1]);
     motor[2]->SetOutput(vel[2]);
     motor[3]->SetOutput(vel[3]);
     float yaw_kF = 400.0f;
-    yaw_motor->SetOutput(command + chassis_yaw_omega_target * yaw_kF);
+    int16_t yaw_output = yaw_feedback + chassis_yaw_omega_target * yaw_kF;
+    yaw_motor->SetOutput(yaw_output);
+    
+    // yaw motor tuning
+    print("err: %.2f m_o : %d \r\n", delta_yaw, yaw_output);
 
     float pitch_rotor = pitch_physical - PITCH_PHYSICAL_OFFSET;
     pitch_motor->SetOutput(pitch_rotor, pitch_omega, 30, 0.5, 0);
@@ -310,6 +313,6 @@ void RM_RTOS_Default_Task(const void* args) {
     // control::Motor6020::TransmitOutput((control::MotorCANBase**)(&yaw_motor), 1);
     control::Motor4310::TransmitOutput(pitch_motors, 1);
     control::Motor3508::TransmitOutput(dji_motors, 4);
-    osDelay(10);
+    osDelay(5);
   }
 }

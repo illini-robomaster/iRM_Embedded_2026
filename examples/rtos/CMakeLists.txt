@@ -31,3 +31,8 @@ irm_add_arm_executable(${PROJECT_NAME}_spin
 irm_add_arm_executable(${PROJECT_NAME}_eventflag
     TARGET DJI_Board_TypeA
     SOURCES eventflag.cc)
+
+# DM-MC-02: Multi-thread demo
+irm_add_arm_executable(${PROJECT_NAME}_mc02
+    TARGET DM_MC_02
+    SOURCES rtos_mc02.cc)

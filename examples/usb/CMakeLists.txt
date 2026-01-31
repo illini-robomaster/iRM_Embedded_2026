@@ -23,3 +23,7 @@ project(example_usb ASM C CXX)
 irm_add_arm_executable(${PROJECT_NAME}
     TARGET DJI_Board_TypeA
     SOURCES main.cc)
+
+irm_add_arm_executable(${PROJECT_NAME}_mc02
+    TARGET DM_MC_02
+    SOURCES usb_mc02.cc)

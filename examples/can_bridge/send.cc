@@ -22,30 +22,47 @@
 #include "bsp_print.h"
 #include "cmsis_os.h"
 #include "main.h"
+#include "sbus.h"
 
 static bsp::CAN* can = nullptr;
 static bsp::CanBridge* send = nullptr;
+static remote::SBUS* sbus = nullptr;
 
 void RM_RTOS_Init(void) {
-  print_use_uart(&huart1);
+  print_use_uart(&huart4);
   can = new bsp::CAN(&hcan2, false);
   send = new bsp::CanBridge(can, 0x20A, 0x20B);
+  sbus = new remote::SBUS(&huart3);
 }
 
 void RM_RTOS_Default_Task(const void* arguments) {
   UNUSED(arguments);
 
   while (true) {
+    print("VX: %f, VY: %f, VZ: %f\n", sbus->ch[6]/660.0, sbus->ch[7]/660.0, sbus->ch[8]/660.0);
     send->cmd.id = bsp::VX;
-    send->cmd.data_float = 8980.1;
+    send->cmd.data_float = sbus->ch[6]/660.0;
     send->TransmitOutput();
-    osDelay(1000);
     send->cmd.id = bsp::VY;
-    send->cmd.data_float = -9.2;
+    send->cmd.data_float = sbus->ch[7]/660.0;
     send->TransmitOutput();
-    send->cmd.id = bsp::VX;
-    send->cmd.data_float = 999;
+    send->cmd.id = bsp::RELATIVE_ANGLE;
+    send->cmd.data_float = sbus->ch[8]/660.0;
     send->TransmitOutput();
-    osDelay(1000);
+    send->cmd.id = bsp::ARM_TRANSLATE;
+    send->cmd.data_float = sbus->ch[9]/660.0;
+    send->TransmitOutput();
+    send->cmd.id = bsp::DEAD;
+    send->cmd.data_bool = sbus->ch[11]>100;
+    send->TransmitOutput();
+    send->cmd.id = bsp::CHASSIS_POWER;
+    // send->cmd.data_float = referee->power_heat_data.chassis_power;
+    send->cmd.data_float = 50;
+    send->TransmitOutput();
+    send->cmd.id = bsp::CHASSIS_POWER_LIMIT;
+    send->cmd.data_float = 50;
+    // send->cmd.data_float = referee->game_robot_status.chassis_power_limit;
+    send->TransmitOutput();
+    osDelay(20);
   }
 }

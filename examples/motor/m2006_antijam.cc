@@ -60,11 +60,11 @@ void jam_callback(control::ServoMotor* servo, const control::servo_jam_t data) {
 }
 
 void RM_RTOS_Init() {
-  print_use_uart(&huart8);
-  bsp::SetHighresClockTimer(&htim2);
+  print_use_uart(&huart1);
+  bsp::SetHighresClockTimer(&htim5);
 
   can1 = new bsp::CAN(&hcan1, true);
-  motor = new control::Motor2006(can1, 0x202);
+  motor = new control::Motor2006(can1, 0x205);
 
   control::servo_t servo_data;
   servo_data.motor = motor;
@@ -85,9 +85,9 @@ void RM_RTOS_Default_Task(const void* args) {
 
   control::MotorCANBase* motors[] = {motor};
   // bsp::GPIO key(KEY_GPIO_GROUP, KEY_GPIO_PIN);
-
+  bsp::GPIO *key = new bsp::GPIO(KEY_GPIO_GROUP, KEY_GPIO_PIN);
   while (true) {
-    if (dbus->swr == remote::UP) {
+    if (!key->Read()) {
       servo->SetMaxSpeed(0);
     } else {
       servo->SetTarget(servo->GetTarget() + LOAD_ANGLE, false);

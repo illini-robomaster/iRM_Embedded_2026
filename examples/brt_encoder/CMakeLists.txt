@@ -20,6 +20,17 @@
 
 project(example_brt_encoder ASM C CXX)
 
-irm_add_arm_executable(${PROJECT_NAME}
+irm_add_arm_executable(${PROJECT_NAME}_typeA
     TARGET DJI_Board_TypeA
     SOURCES main.cc)
+target_compile_definitions(${PROJECT_NAME}_typeA.elf PRIVATE UART_HANDLE=huart8)
+
+irm_add_arm_executable(${PROJECT_NAME}_typeC
+    TARGET DJI_Board_TypeC
+    SOURCES main.cc)
+target_compile_definitions(${PROJECT_NAME}_typeC.elf PRIVATE UART_HANDLE=huart1)
+
+irm_add_arm_executable(${PROJECT_NAME}_mc01
+    TARGET DM_MC_01
+    SOURCES main.cc)
+target_compile_definitions(${PROJECT_NAME}_mc01.elf PRIVATE UART_HANDLE=huart4)

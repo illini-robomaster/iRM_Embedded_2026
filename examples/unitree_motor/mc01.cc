@@ -24,12 +24,14 @@
 #include "bsp_print.h"
 #include "bsp_uart.h"
 #include "cmsis_os.h"
-#include "dbus.h"
+#include "sbus.h"
 #include "bsp_gpio.h"
 
 static control::UnitreeMotor* A1 = nullptr;
-static remote::DBUS* dbus;
+static remote::SBUS* dbus;
 bsp::GPIO* user_key = nullptr;
+bsp::GPIO* rs485_1_dir = nullptr;
+bsp::GPIO* rs485_2_dir = nullptr;
 
 #define RX_SIGNAL (1 << 0)
 
@@ -54,7 +56,9 @@ protected:
   void RxCompleteCallback() override final { osThreadFlagsSet(A1TaskHandle, RX_SIGNAL); }
 };
 
-static CustomUART* A1_uart = nullptr;
+static CustomUART* A1_write_uart = nullptr; // uart for sending commands to A1
+static CustomUART* A1_read_uart = nullptr; // uart for receiving A1 information returned
+
 
 void A1Task(void* arg) {
   UNUSED(arg);
@@ -64,11 +68,17 @@ void A1Task(void* arg) {
   while (true) {
     /* wait until rx data is available */
     uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
+    // print("data received\r\n");
     if (flags & RX_SIGNAL) {  // unnecessary check
-    /* time the non-blocking rx / tx calls (should be <= 1 osTick) */
-    length = A1_uart->Read(&data);
-    if ((int)length == A1->recv_length)
-      A1->ExtractData(communication::package_t{data, (int)length});
+      /* time the non-blocking rx / tx calls (should be <= 1 osTick) */
+      length = A1_read_uart->Read(&data);
+      if ((int)length == A1->recv_length){
+        A1->ExtractData(communication::package_t{data, (int)length});
+        print("data length matches\r\n");
+      }else{
+        print("data length is %d, but need %d\r\n", length, A1->recv_length);
+      }
+      print("timestamp: %d", HAL_GetTick());
     }
   }
 }
@@ -77,13 +87,21 @@ void RM_RTOS_Init(void) {
   print_use_uart(&huart4);
   print("Unitree Motor Test\r\n");
 
-  A1_uart = new CustomUART(&huart1);
-  A1_uart->SetupRx(300);
-  A1_uart->SetupTx(300);
+  A1_write_uart = new CustomUART(&huart1);
+  A1_write_uart->SetupRx(300);
+  A1_write_uart->SetupTx(300);
+
+  A1_read_uart = new CustomUART(&huart2);
+  A1_read_uart->SetupRx(300);
+  A1_read_uart->SetupTx(300);
 
   A1 = new control::UnitreeMotor();
-  dbus = new remote::DBUS(&huart3);
+  dbus = new remote::SBUS(&huart3);
   user_key = new bsp::GPIO(GPIOA, GPIO_PIN_15);
+  rs485_1_dir = new bsp::GPIO(GPIOC, GPIO_PIN_15);
+  rs485_1_dir->High(); 
+  rs485_2_dir = new bsp::GPIO(GPIOB, GPIO_PIN_3);
+  rs485_2_dir->Low(); //rs485_1 in receive mode
 }
 
 void RM_RTOS_Threads_Init(void) {
@@ -95,46 +113,47 @@ void RM_RTOS_Default_Task(const void* arguments) {
 
   print("Press key to start\r\n");
   while(user_key->Read()); // wait for key press
-
   print("Open loop spin test\r\n");
-  A1->Test(2);
-  A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
-  osDelay(3000);
+  // A1->Test(2);
+  // A1_write_uart->Write((uint8_t*)(&(A1->send[2].data)), A1->send_length);
+  // osDelay(3000);
 
-  print("Motor stop\r\n");
-  A1->Stop(2);
-  A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
-  osDelay(3000);
+  // print("Motor stop\r\n");
+  // A1->Stop(2);
+  // A1_write_uart->Write((uint8_t*)(&(A1->send[2].data)), A1->send_length);
+  // osDelay(3000);
 
-  print("Constant speed mode\r\n");
-  A1->Control(2, 0.0, -1.0, 0.0, 0.0, 3.0); // constant speed mode
-  A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
-  osDelay(3000);
+  // print("Constant speed mode\r\n");
+  // A1->Control(2, 0.0, -1.0, 0.0, 0.0, 3.0); // constant speed mode
+  // A1_write_uart->Write((uint8_t*)(&(A1->send[2].data)), A1->send_length);
+  // osDelay(3000);
 
-  print("Motor stop\r\n");
-  A1->Stop(2);
-  A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
-  osDelay(3000);
+  // print("Motor stop\r\n");
+  // A1->Stop(2);
+  // A1_write_uart->Write((uint8_t*)(&(A1->send[2].data)), A1->send_length);
+  // osDelay(3000);
+
 
   print("Position control mode (with remote control)\r\n");
   float pos = 0.0;
   while (true) {
-    float vel;
-    vel = dbus->ch1 / 660.0 * 15;
-    pos += vel / 150.0;
-    A1->Control(2, 0.0, 0.0, pos, 0.05, 3.0);
-    A1_uart->Write((uint8_t*)(&(A1->send.data)), A1->send_length);
-
     set_cursor(0, 0);
     clear_screen();
-    print("Motor ID: %d\r\n", A1->recv.id);
-    print("Mode    : %d\r\n", A1->recv.mode);
-    print("Temp    : %d\r\n", A1->recv.Temp);
-    print("MError  : %d\r\n", A1->recv.MError);
-    print("Torque  : %.3f\r\n", A1->recv.T);
-    print("Speed   : %.3f\r\n", A1->recv.W);
-    print("Accel   : %d\r\n", A1->recv.Acc);
-    print("Position: %.3f\r\n", A1->recv.Pos);
+    // float vel;
+    // vel = dbus->ch[1] / 660.0 * 15;
+    // vel = 100 / 660.0 * 15;
+    A1->Control(2, 0.0, 0.0, pos, 0.05, 3.0);
+    A1_write_uart->Write((uint8_t*)(&(A1->send[2].data)), A1->send_length);
+    print("command sent\r\n");
+  
+    // print("Motor ID: %d\r\n", A1->recv[2].id);
+    // print("Mode    : %d\r\n", A1->recv[2].mode);
+    // print("Temp    : %d\r\n", A1->recv[2].Temp);
+    // print("MError  : %d\r\n", A1->recv[2].MError);
+    // print("Torque  : %.3f\r\n", A1->recv[2].T);
+    // print("Speed   : %.3f\r\n", A1->recv[2].W);
+    // print("Accel   : %d\r\n", A1->recv[2].Acc);
+    // print("Position: %.3f\r\n", A1->recv[2].Pos);
     osDelay(10);
   }
 

@@ -167,3 +167,6 @@ compile_commands.json
 
 # ctags
 tags
+
+# Ignore nested git repositories
+**/.git/

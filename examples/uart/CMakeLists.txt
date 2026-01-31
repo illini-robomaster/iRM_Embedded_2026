@@ -34,3 +34,9 @@ irm_add_arm_executable(${PROJECT_NAME}_mc01
         TARGET DM_MC_01
         SOURCES main.cc)
 target_compile_definitions(${PROJECT_NAME}_mc01.elf PRIVATE UART_HANDLE=huart4)
+
+irm_add_arm_executable(${PROJECT_NAME}_mc02
+        TARGET DM_MC_02
+        SOURCES main.cc)
+# Try UART7 (PE7=RX, PE8=TX) - change to huart10 for USART10 (PE2=RX, PE3=TX)
+target_compile_definitions(${PROJECT_NAME}_mc02.elf PRIVATE UART_HANDLE=huart7)

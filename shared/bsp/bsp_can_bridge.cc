@@ -29,7 +29,7 @@ static void bridge_callback(const uint8_t data[], void* args) {
   bridge->UpdateData(data);
 }
 
-CanBridge::CanBridge(bsp::CAN* can, uint16_t rx_id, uint16_t tx_id) {
+CanBridge::CanBridge(bsp::CanInterface* can, uint16_t rx_id, uint16_t tx_id) {
   can_ = can;
   rx_id_ = rx_id;
   tx_id_ = tx_id;
@@ -92,7 +92,16 @@ void CanBridge::UpdateData(const uint8_t* data) {
       break;
     case SELF_CHECK_FLAG:
         self_check_flag = cmd.data_bool;
-        break;
+      break;
+    case ARM_TRANSLATE:
+      arm_translate = cmd.data_float;
+      break;
+    case CHASSIS_POWER:
+      chassis_power = cmd.data_float;
+      break;
+    case CHASSIS_POWER_LIMIT:
+      chassis_power_limit = cmd.data_uint;
+      break;
     default:;
   }
 }

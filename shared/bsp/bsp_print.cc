@@ -25,7 +25,7 @@
 #include "main.h"
 #include "printf.h"  // third party tiny-printf implemnetations
 
-#define MAX_PRINT_LEN 256
+#define MAX_PRINT_LEN 512  // Increased from 256 for larger IMU output
 
 static bsp::UART* print_uart = NULL;
 static bsp::VirtualUSB* print_usb = NULL;

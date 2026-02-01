@@ -28,9 +28,8 @@ namespace control{
         hold_detector_ = new BoolEdgeDetector(false);
 
         omega_pid_.Reinit(data.omega_pid_param, data.max_iout, data.max_out);
-        
-        data.motor->can_->RegisterRxCallback(data.motor->rx_id_, steering6020_callback, this);
 
+        data.motor->GetCan()->RegisterRxCallback(data.motor->GetRxId(), steering6020_callback, this);
     }
 
     Steering6020::~Steering6020(){

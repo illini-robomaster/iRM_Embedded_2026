@@ -183,7 +183,7 @@ void RM_RTOS_Default_Task(const void* args) {
     LoadDetect.input(dbus->swr == remote::UP);
     if (LoadDetect.posEdge()) {
       // step 1
-      trigger->SetOutputAngle(0);   // need test the trigger angle
+      trigger->SetOutPutAngle(0);   // need test the trigger angle
       osDelay(100);                 // need test the delay time(wait for the)
                                     // step 2
       while (true) {
@@ -202,7 +202,7 @@ void RM_RTOS_Default_Task(const void* args) {
         osDelay(2);
       }
       // step 3
-      trigger->SetOutputAngle(-80);  // need test the trigger angle
+      trigger->SetOutPutAngle(-80);  // need test the trigger angle
       osDelay(1700); // need test the delay time(wait for the)
       // after reload pulling
       i = 0;

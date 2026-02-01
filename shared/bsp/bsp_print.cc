@@ -43,6 +43,7 @@ void print_use_usb() {
   if (!print_usb) print_usb = new bsp::VirtualUSB();
 
   print_usb->SetupTx(MAX_PRINT_LEN * 2);  // burst transfer size up to 2x max buffer size
+  print_usb->SetupRx(MAX_PRINT_LEN * 2);  // also setup RX buffer for proper USB CDC operation
   print_uart = NULL;
 }
 

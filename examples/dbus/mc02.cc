@@ -58,7 +58,8 @@
 static remote::DBUS* dbus;
 
 void RM_RTOS_Init(void) {
-  print_use_uart(&huart7);
+  // print_use_uart(&huart7);
+  print_use_usb();
   dbus = new remote::DBUS(&huart5);
 }
 

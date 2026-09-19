@@ -1947,9 +1947,10 @@ unsigned char cat[12][128][8] = {{
                                      {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
                                  }};
 
-OLED::OLED(I2C_HandleTypeDef* hi2c, uint16_t OLED_i2c_addr) {
+OLED::OLED(I2C_HandleTypeDef* hi2c, uint16_t OLED_i2c_addr, uint8_t col_offset) {
   hi2c_ = hi2c;
   OLED_i2c_addr_ = OLED_i2c_addr << 1;
+  col_offset_ = col_offset;
   Init();
 }
 
@@ -2024,6 +2025,7 @@ void OLED::OperateGram(pen_typedef pen) {
 }
 
 void OLED::SetPos(uint8_t x, uint8_t y) {
+  x += col_offset_;
   WriteByte((0xb0 + y), OLED_CMD);                // set page address y
   WriteByte(((x & 0xf0) >> 4) | 0x10, OLED_CMD);  // set column high address
   WriteByte((x & 0x0f), OLED_CMD);

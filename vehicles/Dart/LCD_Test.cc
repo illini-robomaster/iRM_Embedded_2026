@@ -18,65 +18,103 @@
  *                                                                          *
  ****************************************************************************/
 
+// Menu demo for the 4-button OLED module on DJI_Board_TypeA.
+//
+// The four buttons sit on PC0..PC3, but CubeMX splits them across two very
+// different modes, so they cannot all be read the same way:
+//
+//   up    PC0  ADC1_IN10, GPIO_MODE_ANALOG  -> read as an ADC code
+//   down  PC1  ADC1_IN11, GPIO_MODE_ANALOG  -> read as an ADC code
+//   #     PC2  L1_Pin, GPIO_MODE_INPUT + pull-up -> HAL_GPIO_ReadPin
+//   *     PC3  M1_Pin, GPIO_MODE_INPUT + pull-up -> HAL_GPIO_ReadPin
+//
+// GPIO_MODE_ANALOG disables the digital input buffer, so IDR reads 0 for PC0
+// and PC1 no matter what the button does.  They have to come from the ADC.
+// Each button is a switch to ground with a pull-up: idle reads ~4095 / high,
+// held reads ~0 / low.
+
 #include "main.h"
 
-#include "bsp_can.h"
+#include "adc.h"
 #include "bsp_print.h"
-#include "bsp_uart.h"
-#include "can.h"
 #include "cmsis_os.h"
-#include "controller.h"
 #include "i2c.h"
-#include "motor.h"
 #include "oled.h"
 
-#define MOTOR_SPEED 200  // RPM, positive = forward
+// This module's controller is an SH1106: 132 GDDRAM columns with the panel
+// wired to SEG2..SEG129, so everything has to be shifted right by two.
+#define OLED_COL_OFFSET 2
 
-static display::OLED*          OLED  = nullptr;
-static bsp::CAN*               can   = nullptr;
-static control::MotorCANBase*  motor = nullptr;
-static control::PIDController* pid   = nullptr;
+#define ADC_RANK_COUNT 4
+#define ADC_INDEX_UP 1    // ADC_CHANNEL_10 / PC0 sits at rank 2
+#define ADC_INDEX_DOWN 2  // ADC_CHANNEL_11 / PC1 sits at rank 3
+
+// Idle is ~4095 and held is ~0, so anything near mid-scale is a safe split.
+#define ADC_PRESS_LEVEL 2048
+
+#define DEBOUNCE_MS 200
+
+// Fills the whole screen white then black on boot.  Anything that does not
+// follow along is outside the 128 columns this driver can address, which is
+// what a 132-column SH1106 controller looks like when it is driven as an
+// SSD1306.  Set to 0 once the panel has been identified.
+#define SCREEN_SELFTEST 0
+
+static display::OLED* OLED = nullptr;
+
+// The ADC DMA stream is configured for HALFWORD transfers in HAL_ADC_MspInit,
+// so this has to be 16-bit wide even though HAL_ADC_Start_DMA takes uint32_t*.
+static uint16_t adc_buf[ADC_RANK_COUNT];
 
 void RM_RTOS_Init(void) {
   print_use_uart(&huart1);
-  OLED  = new display::OLED(&hi2c2, 0x3C);
-  can   = new bsp::CAN(&hcan1, true);
-  motor = new control::Motor3508(can, 0x202);
-  pid   = new control::PIDController(20, 15, 30);
-
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  GPIO_InitTypeDef GPIO_InitStruct;
-  GPIO_InitStruct.Pin   = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3;
-  GPIO_InitStruct.Mode  = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull  = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  OLED = new display::OLED(&hi2c2, 0x3C, OLED_COL_OFFSET);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buf, ADC_RANK_COUNT);
+  // PC2 / PC3 are already INPUT with a pull-up from MX_GPIO_Init, and PC0 /
+  // PC1 belong to the ADC, so nothing here should touch GPIOC's config.
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────
+// ── input ─────────────────────────────────────────────────────────────────
 
-static bool ReadKey(uint16_t pin) {
-  return HAL_GPIO_ReadPin(GPIOC, pin) == GPIO_PIN_RESET;
-}
+static bool KeyUp(void) { return adc_buf[ADC_INDEX_UP] < ADC_PRESS_LEVEL; }
+static bool KeyDown(void) { return adc_buf[ADC_INDEX_DOWN] < ADC_PRESS_LEVEL; }
+static bool KeyHash(void) { return HAL_GPIO_ReadPin(L1_GPIO_Port, L1_Pin) == GPIO_PIN_RESET; }
+static bool KeyStar(void) { return HAL_GPIO_ReadPin(M1_GPIO_Port, M1_Pin) == GPIO_PIN_RESET; }
 
-// Invert all pixels in text row `text_row` (0-based, each row is 12 px tall)
-// over the full screen width [0, 127].  Called *after* Printf so the normal
-// white-on-black text is flipped to black-on-white (highlight effect).
-static void InvertTextRow(uint8_t text_row) {
-  const uint8_t y_start = text_row * 12;
-  const uint8_t y_end   = y_start + 11;
-  for (uint8_t y = y_start; y <= y_end; ++y) {
-    OLED->DrawLine(0, y, 127, y, display::PEN_INVERSION);
+typedef struct {
+  bool prev;
+  uint32_t last_ms;
+} KeyState;
+
+// Debounced rising edge: true once per press, no more often than DEBOUNCE_MS.
+static bool JustPressed(bool now_down, KeyState* s, uint32_t now_ms) {
+  bool fired = false;
+  if (now_down && !s->prev && (now_ms - s->last_ms >= DEBOUNCE_MS)) {
+    s->last_ms = now_ms;
+    fired = true;
   }
+  s->prev = now_down;
+  return fired;
 }
 
 // ── content ───────────────────────────────────────────────────────────────
 
 static const uint8_t NUM_ITEMS = 2;
-static const char* ITEM_LABEL[]  = {"Joey is GOAT", "Daniel is Qu"};
-static const char* ITEM_DETAIL[] = {"GOAT",          "Qu"};
+static const char* ITEM_LABEL[] = {"Joey is GOAT", "Daniel is Qu"};
+static const char* ITEM_DETAIL[] = {"GOAT", "Qu"};
 
 // ── rendering ─────────────────────────────────────────────────────────────
+
+// Invert all pixels in text row `text_row` (0-based, each row is 12 px tall)
+// over the full screen width.  Called *after* Printf so the normal
+// white-on-black text is flipped to black-on-white (highlight effect).
+static void InvertTextRow(uint8_t text_row) {
+  const uint8_t y_start = text_row * 12;
+  const uint8_t y_end = y_start + 11;
+  for (uint8_t y = y_start; y <= y_end; ++y) {
+    OLED->DrawLine(0, y, 127, y, display::PEN_INVERSION);
+  }
+}
 
 static void DrawMenu(uint8_t cursor) {
   OLED->OperateGram(display::PEN_CLEAR);
@@ -84,7 +122,7 @@ static void DrawMenu(uint8_t cursor) {
   for (uint8_t i = 0; i < NUM_ITEMS; ++i) {
     OLED->Printf(i + 1, 2, ITEM_LABEL[i]);  // items at row 1 and 2
   }
-  OLED->Printf(4, 0, "K1^ K2v K3:OK");
+  OLED->Printf(4, 2, "UP/DN  #:OK");
   // Highlight selected row: items live at text rows (cursor+1)
   InvertTextRow(cursor + 1);
   OLED->RefreshGram();
@@ -94,7 +132,7 @@ static void DrawDetail(uint8_t item) {
   OLED->OperateGram(display::PEN_CLEAR);
   OLED->Printf(0, 2, ITEM_LABEL[item]);
   OLED->Printf(2, 2, ITEM_DETAIL[item]);
-  OLED->Printf(4, 0, "K4:Back");
+  OLED->Printf(4, 2, "*:Back");
   OLED->RefreshGram();
 }
 
@@ -103,6 +141,15 @@ static void DrawDetail(uint8_t item) {
 void RM_RTOS_Default_Task(const void* arg) {
   UNUSED(arg);
 
+#if SCREEN_SELFTEST
+  OLED->OperateGram(display::PEN_WRITE);
+  OLED->RefreshGram();
+  osDelay(2000);
+  OLED->OperateGram(display::PEN_CLEAR);
+  OLED->RefreshGram();
+  osDelay(2000);
+#endif
+
   OLED->ShowRMLOGO();
   osDelay(2000);
   OLED->ShowIlliniRMLOGO();
@@ -110,77 +157,38 @@ void RM_RTOS_Default_Task(const void* arg) {
 
   typedef enum { STATE_MENU, STATE_DETAIL } AppState;
 
-  AppState state    = STATE_MENU;
-  uint8_t  cursor   = 0;
-  bool     need_redraw = true;
+  AppState state = STATE_MENU;
+  uint8_t cursor = 0;
+  bool need_redraw = true;
 
-  bool     prev_k1 = false, prev_k2 = false,
-           prev_k3 = false, prev_k4 = false;
-  uint32_t last_k1 = 0,    last_k2 = 0,
-           last_k3 = 0,    last_k4 = 0;
+  KeyState up = {false, 0}, down = {false, 0}, hash = {false, 0}, star = {false, 0};
 
   while (true) {
-    const bool     k1  = ReadKey(GPIO_PIN_0);
-    const bool     k2  = ReadKey(GPIO_PIN_1);
-    const bool     k3  = ReadKey(GPIO_PIN_2);
-    const bool     k4  = ReadKey(GPIO_PIN_3);
     const uint32_t now = HAL_GetTick();
 
-    // K1 (PC0) – move cursor up
-    if (k1 && !prev_k1 && (now - last_k1 >= 200)) {
-      last_k1 = now;
-      if (state == STATE_MENU) {
-        cursor = (cursor == 0) ? (NUM_ITEMS - 1) : cursor - 1;
-        need_redraw = true;
-      }
+    if (JustPressed(KeyUp(), &up, now) && state == STATE_MENU) {
+      cursor = (cursor == 0) ? (NUM_ITEMS - 1) : cursor - 1;
+      need_redraw = true;
     }
-    // K2 (PC1) – move cursor down
-    if (k2 && !prev_k2 && (now - last_k2 >= 200)) {
-      last_k2 = now;
-      if (state == STATE_MENU) {
-        cursor = (cursor + 1) % NUM_ITEMS;
-        need_redraw = true;
-      }
+    if (JustPressed(KeyDown(), &down, now) && state == STATE_MENU) {
+      cursor = (cursor + 1) % NUM_ITEMS;
+      need_redraw = true;
     }
-    // K3 (PC2) – confirm
-    if (k3 && !prev_k3 && (now - last_k3 >= 200)) {
-      last_k3 = now;
-      if (state == STATE_MENU) {
-        state = STATE_DETAIL;
-        need_redraw = true;
-      }
+    if (JustPressed(KeyHash(), &hash, now) && state == STATE_MENU) {
+      state = STATE_DETAIL;
+      need_redraw = true;
     }
-    // K4 (PC3) – cancel / back
-    if (k4 && !prev_k4 && (now - last_k4 >= 200)) {
-      last_k4 = now;
-      if (state == STATE_DETAIL) {
-        state = STATE_MENU;
-        need_redraw = true;
-      }
+    if (JustPressed(KeyStar(), &star, now) && state == STATE_DETAIL) {
+      state = STATE_MENU;
+      need_redraw = true;
     }
-
-    prev_k1 = k1;  prev_k2 = k2;
-    prev_k3 = k3;  prev_k4 = k4;
 
     if (need_redraw) {
-      if (state == STATE_MENU) DrawMenu(cursor);
-      else                      DrawDetail(cursor);
+      if (state == STATE_MENU)
+        DrawMenu(cursor);
+      else
+        DrawDetail(cursor);
       need_redraw = false;
-    }
-
-    // ── Motor control ────────────────────────────────────────────────────
-    {
-      control::MotorCANBase* motors[] = {motor};
-      if (state == STATE_DETAIL) {
-        // cursor 0 = Joey is GOAT → forward, cursor 1 = Daniel is Qu → reverse
-        float   target = (cursor == 0) ? MOTOR_SPEED : -MOTOR_SPEED;
-        float   diff   = motor->GetOmegaDelta(target);
-        int16_t out    = pid->ComputeConstrainedOutput(diff);
-        motor->SetOutput(out);
-      } else {
-        motor->SetOutput(0);
-      }
-      control::MotorCANBase::TransmitOutput(motors, 1);
     }
 
     osDelay(10);

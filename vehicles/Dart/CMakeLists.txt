@@ -44,3 +44,7 @@ irm_add_arm_executable(dart_openmv_calibration
 irm_add_arm_executable(lcd
         TARGET DJI_Board_TypeA
         SOURCES LCD_Test.cc)
+
+irm_add_arm_executable(lcd_probe
+        TARGET DJI_Board_TypeA
+        SOURCES LCD_Input_Probe.cc)

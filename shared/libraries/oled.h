@@ -45,7 +45,15 @@ typedef enum {
 
 class OLED {
  public:
-  OLED(I2C_HandleTypeDef* hi2c, uint16_t OLED_i2c_addr);
+  /**
+   * @param[in]      col_offset: first GDDRAM column that the panel actually
+   *                 shows.  0 for a true SSD1306 (128 columns).  SH1106 parts
+   *                 have 132 columns and wire the panel to SEG2..SEG129, so
+   *                 they need 2 here -- otherwise the leftmost two pixel
+   *                 columns fall off the panel and the two columns that are
+   *                 never written show up as a noise stripe at the edge.
+   */
+  OLED(I2C_HandleTypeDef* hi2c, uint16_t OLED_i2c_addr, uint8_t col_offset = 0);
 
   bool IsReady();
 
@@ -173,6 +181,7 @@ class OLED {
 
   I2C_HandleTypeDef* hi2c_;
   uint16_t OLED_i2c_addr_;
+  uint8_t col_offset_;
   uint8_t OLED_GRAM_[128][8];
 };
 

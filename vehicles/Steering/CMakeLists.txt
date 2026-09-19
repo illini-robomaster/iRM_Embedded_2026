@@ -27,3 +27,7 @@ irm_add_arm_executable(Steering_chassis
 irm_add_arm_executable(Steering_gimbal
     TARGET DJI_Board_TypeC
     SOURCES gimbal.cc)
+
+irm_add_arm_executable(Steering_target
+    TARGET DJI_Board_TypeC
+    SOURCES target.cc)

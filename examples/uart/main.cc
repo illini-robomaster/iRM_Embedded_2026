@@ -61,7 +61,7 @@ void RM_RTOS_Default_Task(const void* argument) {
   UNUSED(argument);
 
   uint32_t length;
-  uint8_t* data;
+  const uint8_t data[9] = "114514\n\r";
 
   auto uart = std::make_unique<CustomUART>(&UART_HANDLE);
   uart->SetupRx(50);
@@ -74,14 +74,14 @@ void RM_RTOS_Default_Task(const void* argument) {
 
   while (true) {
     /* wait until rx data is available */
-    uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
-    if (flags & RX_SIGNAL) {
-      length = uart->Read(&data);
+    // uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
+    if (true) {    // (flags & RX_SIGNAL) {
+      length = 7;  // uart->Read(data);
       // data read from uart, basically hearing from keyboard
       uart->Write(data, length);
-      uart->Write(data, length);
-      uart->Write(data, length);
-      // data written to uart, echos three times
+      // uart->Write(data, length);
+      // uart->Write(data, length);
+      //  data written to uart, echos three times
     }
   }
 }

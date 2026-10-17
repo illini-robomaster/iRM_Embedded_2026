@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 #include "bsp_print.h"
 #include "bsp_uart.h"
 #include "cmsis_os.h"
@@ -69,6 +71,31 @@ typedef struct {
   float floats[6];
 } __packed arm_data_t;
 
+// The opaque mode byte in board_state_t. The protocol assigns no meaning to it;
+// a side that wants flags keeps its own bitfield and memcpy's the byte into it.
+constexpr uint8_t MODE_LEN = 1;
+
+// STM32 -> Jetson state, sent as one packet so the Jetson gets an atomic
+// snapshot (attitude and gimbal state from the same instant).
+//
+// yaw/pitch are the MEASURED motor angles with the gimbal calibration offset
+// removed, i.e. the same frame as the angles the Jetson commands. Use
+// yaw_motor->GetTheta() - gimbal_data.yaw_offset_, not Gimbal::yaw_angle_
+// (which is the target).
+typedef struct {
+  float q[4];              // IMU attitude, w x y z
+  float yaw;               // measured motor angle, offset-corrected
+  float pitch;             // measured motor angle, offset-corrected
+  float bullet_speed;
+  uint8_t mode[MODE_LEN];  // opaque
+} __packed board_state_t;
+
+// Wire layout is part of the protocol; keep it in sync with io::BoardState in
+// iRM_Vision_2026/io/minipc/minipc_protocol.hpp.
+static_assert(sizeof(board_state_t) == 29, "board_state_t layout must stay 29 bytes");
+static_assert(offsetof(board_state_t, yaw) == 16, "board_state_t.yaw offset changed");
+static_assert(offsetof(board_state_t, mode) == 28, "board_state_t.mode offset changed");
+
 // summary of all information transmitted between minipc and stm32
 typedef struct {
   // RED is 0; BLUE is one
@@ -89,12 +116,14 @@ typedef struct {
 // CHASSIS_CMD_ID : 0x02
 // SELFCHECK_CMD_ID :0x03
 // ARM_CMD-ID     : 0x04
+// BOARD_STATE_CMD_ID : 0x05 STM32 -> Jetson state (IMU + gimbal + misc)
 // TOTAL_NUM_OF_ID: length of the enum
 enum CMD_ID {GIMBAL_CMD_ID,
              COLOR_CMD_ID,
              CHASSIS_CMD_ID,
              SELFCHECK_CMD_ID,
              ARM_CMD_ID,
+             BOARD_STATE_CMD_ID,
              TOTAL_NUM_OF_ID};
 
 // WARNING: THIS CLASS IS NOT THREAD SAFE!!!
@@ -113,6 +142,7 @@ class MinipcPort {
   void PackChassisData(uint8_t* packet, chassis_data_t* data);
   void PackSelfcheckData(uint8_t* packet, selfcheck_data_t* data);
   void PackArmData(uint8_t* packet, arm_data_t* data);
+  void PackBoardState(uint8_t* packet, board_state_t* data);
 
   /**
    * @brief Total length of packet in bytes
@@ -152,6 +182,7 @@ class MinipcPort {
    * Chassis   CMD: id = 0x02, total packet length = 21 - 9 = 12
    * Selfcheck CMD: id = 0x03, total packet length = 11 - 9 = 2
    * Arm       CMD: id = 0x04, total packet length = 33 - 9 = 24
+   * BoardState CMD: id = 0x05, total packet length = 38 - 9 = 29
    */
   static constexpr uint8_t CMD_TO_LEN[TOTAL_NUM_OF_ID] = {
                                                 sizeof(gimbal_data_t),
@@ -159,8 +190,9 @@ class MinipcPort {
                                                 sizeof(chassis_data_t),
                                                 sizeof(selfcheck_data_t),
                                                 sizeof(arm_data_t),
+                                                sizeof(board_state_t),
                                                 };
-  static constexpr uint8_t MAX_PACKET_LENGTH = 33;
+  static constexpr uint8_t MAX_PACKET_LENGTH = 38;
   static constexpr uint8_t MIN_PACKET_LENGTH = 10;
   // sum of header and tail = 9. Total packet length = data length (CMD_TO_LEN) + 9
   static constexpr uint8_t HT_LEN = 9;

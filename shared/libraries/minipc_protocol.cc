@@ -54,6 +54,10 @@ void MinipcPort::Pack(uint8_t* packet, void* data, uint8_t cmd_id) {
       break;
     case ARM_CMD_ID:
       PackArmData(packet, static_cast<arm_data_t*>(data));
+      break;
+    case BOARD_STATE_CMD_ID:
+      PackBoardState(packet, static_cast<board_state_t*>(data));
+      break;
   }
 }
 
@@ -96,6 +100,19 @@ void MinipcPort::PackArmData(uint8_t* packet, arm_data_t* data) {
   memcpy(&packet[16 + DATA_OFFSET], &data->floats[4], sizeof(float));
   memcpy(&packet[20 + DATA_OFFSET], &data->floats[5], sizeof(float));
   AddCRC8(packet, ARM_CMD_ID);
+}
+
+void MinipcPort::PackBoardState(uint8_t* packet, board_state_t* data) {
+  AddHeaderTail(packet, BOARD_STATE_CMD_ID);
+  memcpy(&packet[0 + DATA_OFFSET], &data->q[0], sizeof(float));
+  memcpy(&packet[4 + DATA_OFFSET], &data->q[1], sizeof(float));
+  memcpy(&packet[8 + DATA_OFFSET], &data->q[2], sizeof(float));
+  memcpy(&packet[12 + DATA_OFFSET], &data->q[3], sizeof(float));
+  memcpy(&packet[16 + DATA_OFFSET], &data->yaw, sizeof(float));
+  memcpy(&packet[20 + DATA_OFFSET], &data->pitch, sizeof(float));
+  memcpy(&packet[24 + DATA_OFFSET], &data->bullet_speed, sizeof(float));
+  memcpy(&packet[28 + DATA_OFFSET], data->mode, MODE_LEN);
+  AddCRC8(packet, BOARD_STATE_CMD_ID);
 }
 
 uint8_t MinipcPort::GetPacketLen(uint8_t cmd_id) {

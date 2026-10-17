@@ -47,3 +47,7 @@ irm_add_arm_executable(${PROJECT_NAME}_minipccontroller
 irm_add_arm_executable(${PROJECT_NAME}_chassis
         TARGET DJI_Board_TypeC
         SOURCES ChassisTest.cc)
+
+irm_add_arm_executable(${PROJECT_NAME}_boardstate
+    TARGET DJI_Board_TypeC
+    SOURCES BoardState.cc)

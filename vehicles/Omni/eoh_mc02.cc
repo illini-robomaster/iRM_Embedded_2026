@@ -135,8 +135,10 @@ void RM_RTOS_Threads_Init(void) {
 // Global peripherals
 bsp::CAN* can = nullptr;
 control::MotorDM3519* motor[4];
-
+control::Motor4310* gimbal_motor;
 control::Motor6020* yaw_motor;
+control::Motor3508* flywheel_motor[2];
+control::Motor3508* feeder_motor;
 
 remote::DBUS* dbus = nullptr;
 
@@ -161,8 +163,13 @@ void RM_RTOS_Init() {
   motor[1] = new control::MotorDM3519(can, 0x12, 0x13, control::VEL); // back left
   motor[2] = new control::MotorDM3519(can, 0x18, 0x19, control::VEL); // back right
   motor[3] = new control::MotorDM3519(can, 0x16, 0x17, control::VEL);  // front left
+
+  gimbal_motor = new control::Motor4310(can, 0x1d, 0x1c, control::MIT);
   
   yaw_motor = new control::Motor6020(can, 0x205);
+  flywheel_motor[0] = new control::Motor3508(can, 0x207);
+  flywheel_motor[1] = new control::Motor3508(can, 0x208);
+  feeder_motor = new control::Motor3508(can, 0x206);
 
   // MC02 uses UART5 for DBUS
   dbus = new remote::DBUS(&huart5);
@@ -178,6 +185,9 @@ void RM_RTOS_Default_Task(const void* args) {
 
   control::MotorDM3519* motors[] = {motor[0], motor[1], motor[2], motor[3]};
   control::MotorCANBase* yaw_container[] = {yaw_motor};
+  control::Motor4310* gimbal_container[] = {gimbal_motor};
+  control::MotorCANBase* flywheel_motors[] = {flywheel_motor[0], flywheel_motor[1]};
+  control::MotorCANBase* feeder_container[] = {feeder_motor};
   control::PIDController pid_(40000.0, 0.0, 300000.0);
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
@@ -274,11 +284,18 @@ void RM_RTOS_Default_Task(const void* args) {
     motor[1]->SetOutput(vel[1]);
     motor[2]->SetOutput(vel[2]);
     motor[3]->SetOutput(vel[3]);
+    gimbal_motor->SetOutput(0);
+    flywheel_motor[0]->SetOutput(0);
+    flywheel_motor[1]->SetOutput(0);
+    feeder_motor->SetOutput(0);
     float yaw_kF = 400.0f;
     int16_t yaw_output = yaw_feedback + chassis_yaw_omega_target * yaw_kF;
     yaw_motor->SetOutput(yaw_output);
     control::MotorDM3519::TransmitOutput(motors, 4);
     control::MotorCANBase::TransmitOutput(yaw_container, 1);
+    control::Motor4310::TransmitOutput(gimbal_container, 1);
+    control::MotorCANBase::TransmitOutput(flywheel_motors, 2);
+    control::MotorCANBase::TransmitOutput(feeder_container, 1);
 
     osDelay(5);
   }

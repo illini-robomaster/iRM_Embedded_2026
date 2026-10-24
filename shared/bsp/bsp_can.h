@@ -33,8 +33,18 @@ namespace bsp {
 /* can callback function pointer */
 typedef void (*can_rx_callback_t)(const uint8_t data[], void* args);
 
+/* can callback function pointer that also receives the received DLC */
+typedef void (*can_rx_dlc_callback_t)(const uint8_t data[], uint32_t dlc, void* args);
+
 class CAN {
   public:
+    /* result of a non-blocking transmission attempt */
+    enum class TxResult : uint8_t {
+      QUEUED, /* a TX mailbox accepted the frame */
+      BUSY,   /* all TX mailboxes are occupied, retry later */
+      ERROR,  /* invalid arguments or the HAL rejected the frame */
+    };
+
     /**
      * @brief constructor for bsp CAN instance
      *
@@ -60,9 +70,38 @@ class CAN {
      * @param callback  callback function
      * @param args      argument passed into the callback function
      *
-     * @return return 0 if success, -1 if invalid std_id
+     * @return return 0 if success, -1 if invalid std_id or the table is full
+     *
+     * @note Registering an existing id replaces its callback in the same slot.
+     *       ServoMotor/Steering6020 rely on this override behavior.
      */
     int RegisterRxCallback(uint32_t std_id, can_rx_callback_t callback, void* args = NULL);
+
+    /**
+     * @brief register a callback that also receives the received DLC
+     *
+     * @param std_id    rx id
+     * @param callback  callback function
+     * @param args      argument passed into the callback function
+     *
+     * @return return 0 if success, -1 if the id is invalid or the table is full
+     *
+     * @note Use this instead of RegisterRxCallback when the protocol has to
+     *       reject frames whose DLC is not the expected length.  Registering an
+     *       existing id replaces its callback in the same slot, preserving the
+     *       legacy motor-wrapper override behavior.
+     */
+    int RegisterDlcRxCallback(uint32_t std_id, can_rx_dlc_callback_t callback, void* args = NULL);
+
+    /**
+     * @brief strict DLC callback registration for protocol links
+     *
+     * Unlike RegisterDlcRxCallback, this rejects an already registered id
+     * instead of replacing its callback.  Use it to detect ID allocation bugs
+     * without changing legacy motor override semantics.
+     */
+    int RegisterUniqueDlcRxCallback(uint32_t std_id, can_rx_dlc_callback_t callback,
+                                    void* args = NULL);
 
     /**
      * @brief transmit can messages
@@ -71,9 +110,27 @@ class CAN {
      * @param data[]  data bytes
      * @param length  length of data, must be in (0, 8]
      *
-     * @return  number of bytes transmitted, -1 if failed
+     * @return  number of bytes transmitted, -1 if failed or the 2 ms completion
+     *          deadline expires (the pending mailbox is aborted on timeout)
      */
     int Transmit(uint16_t id, const uint8_t data[], uint32_t length);
+
+    /**
+     * @brief try to queue a can message without blocking
+     *
+     * @param id      tx id
+     * @param data[]  data bytes
+     * @param length  length of data, must be in (0, 8]
+     *
+     * @return QUEUED if a TX mailbox accepted the frame, BUSY if all TX
+     *         mailboxes are currently occupied, ERROR otherwise
+     *
+     * @note Unlike Transmit(), this never waits for a mailbox.  Callers that
+     *       share the bus with a control loop can retry on BUSY.  Call this from
+     *       task context only: the short mailbox critical section is not
+     *       interrupt-safe.
+     */
+    TxResult TryTransmit(uint16_t id, const uint8_t data[], uint32_t length);
 
     /**
      * @brief callback wrapper called from IRQ context
@@ -89,6 +146,9 @@ class CAN {
 
     can_rx_callback_t rx_callbacks_[MAX_CAN_DEVICES] = {0};
     void* rx_args_[MAX_CAN_DEVICES] = {NULL};
+
+    can_rx_dlc_callback_t rx_dlc_callbacks_[MAX_CAN_DEVICES] = {0};
+    void* rx_dlc_args_[MAX_CAN_DEVICES] = {NULL};
 
     std::map<uint16_t, uint8_t> id_to_index_;
     uint8_t callback_count_ = 0;

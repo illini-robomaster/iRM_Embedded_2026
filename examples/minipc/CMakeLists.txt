@@ -51,3 +51,12 @@ irm_add_arm_executable(${PROJECT_NAME}_chassis
 irm_add_arm_executable(${PROJECT_NAME}_boardstate
     TARGET DJI_Board_TypeC
     SOURCES BoardState.cc)
+
+irm_add_arm_executable(${PROJECT_NAME}_cboardcan
+    TARGET DJI_Board_TypeC
+    SOURCES CBoardCAN.cc)
+
+irm_add_arm_executable(${PROJECT_NAME}_cboardcan_can2
+    TARGET DJI_Board_TypeC
+    SOURCES CBoardCAN.cc)
+target_compile_definitions(${PROJECT_NAME}_cboardcan_can2.elf PRIVATE BOARD_STATE_CAN_USE_CAN2=1)

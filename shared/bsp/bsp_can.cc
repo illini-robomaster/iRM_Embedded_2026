@@ -25,6 +25,10 @@
 
 namespace bsp {
 
+    // A normal 1 Mbps frame completes in well under 1 ms. Never let a missing
+    // ACK / bus-off leave a motor or protocol task spinning forever.
+    constexpr uint32_t CAN_TX_COMPLETION_TIMEOUT_MS = 2;
+
     std::map<CAN_HandleTypeDef*, CAN*> CAN::ptr_map;
 
     /**
@@ -80,16 +84,74 @@ namespace bsp {
     }
 
     int CAN::RegisterRxCallback(uint32_t std_id, can_rx_callback_t callback, void* args) {
-        // int callback_id = std_id - start_id_;
+        if (std_id > 0x7FF) return -1;
 
-        if (callback_count_ >= MAX_CAN_DEVICES) return -1;
+        int result = 0;
+        // Registration happens after HAL_CAN_Start, so protect the map and the
+        // parallel callback arrays from the RX interrupt while they change.
+        taskENTER_CRITICAL();
+        const auto it = id_to_index_.find(std_id);
+        if (it != id_to_index_.end()) {
+            // Legacy motor wrappers intentionally override the base callback.
+            // Replace it in place instead of consuming another slot or failing.
+            const uint8_t slot = it->second;
+            rx_args_[slot] = args;
+            rx_callbacks_[slot] = callback;
+            rx_dlc_args_[slot] = nullptr;
+            rx_dlc_callbacks_[slot] = nullptr;
+        } else if (callback_count_ >= MAX_CAN_DEVICES) {
+            result = -1;
+        } else {
+            rx_args_[callback_count_] = args;
+            rx_callbacks_[callback_count_] = callback;
+            id_to_index_[std_id] = callback_count_;
+            callback_count_++;
+        }
+        taskEXIT_CRITICAL();
+        return result;
+    }
 
-        rx_args_[callback_count_] = args;
-        rx_callbacks_[callback_count_] = callback;
-        id_to_index_[std_id] = callback_count_;
-        callback_count_++;
+    int CAN::RegisterDlcRxCallback(uint32_t std_id, can_rx_dlc_callback_t callback, void* args) {
+        if (std_id > 0x7FF) return -1;
 
-        return 0;
+        int result = 0;
+        taskENTER_CRITICAL();
+        const auto it = id_to_index_.find(std_id);
+        if (it != id_to_index_.end()) {
+            const uint8_t slot = it->second;
+            rx_args_[slot] = nullptr;
+            rx_callbacks_[slot] = nullptr;
+            rx_dlc_args_[slot] = args;
+            rx_dlc_callbacks_[slot] = callback;
+        } else if (callback_count_ >= MAX_CAN_DEVICES) {
+            result = -1;
+        } else {
+            rx_dlc_args_[callback_count_] = args;
+            rx_dlc_callbacks_[callback_count_] = callback;
+            id_to_index_[std_id] = callback_count_;
+            callback_count_++;
+        }
+        taskEXIT_CRITICAL();
+        return result;
+    }
+
+    int CAN::RegisterUniqueDlcRxCallback(uint32_t std_id, can_rx_dlc_callback_t callback,
+                                         void* args) {
+        if (std_id > 0x7FF) return -1;
+
+        int result = 0;
+        taskENTER_CRITICAL();
+        if (id_to_index_.find(std_id) != id_to_index_.end() ||
+            callback_count_ >= MAX_CAN_DEVICES) {
+            result = -1;
+        } else {
+            rx_dlc_args_[callback_count_] = args;
+            rx_dlc_callbacks_[callback_count_] = callback;
+            id_to_index_[std_id] = callback_count_;
+            callback_count_++;
+        }
+        taskEXIT_CRITICAL();
+        return result;
     }
 
     int CAN::Transmit(uint16_t id, const uint8_t data[], uint32_t length) {
@@ -107,26 +169,88 @@ namespace bsp {
         };
 
         uint32_t mailbox;
-        if (HAL_CAN_AddTxMessage(hcan_, &header, (uint8_t*)data, &mailbox) != HAL_OK)
+        HAL_StatusTypeDef status;
+        // A CAN line can be shared by several tasks (e.g. motor commands and a
+        // telemetry link). HAL_CAN_AddTxMessage writes several registers and is
+        // not reentrant, so keep the mailbox setup atomic. The completion wait
+        // stays outside the critical section.
+        taskENTER_CRITICAL();
+        status = HAL_CAN_AddTxMessage(hcan_, &header, (uint8_t*)data, &mailbox);
+        taskEXIT_CRITICAL();
+        if (status != HAL_OK)
             return -1;
 
-        // poll for can transmission to complete
-        while (HAL_CAN_IsTxMessagePending(hcan_, mailbox));
+        // Poll with a bounded deadline. AutoRetransmission can otherwise keep a
+        // mailbox pending forever when no peer is present to ACK the frame.
+        const uint32_t start_ms = HAL_GetTick();
+        while (HAL_CAN_IsTxMessagePending(hcan_, mailbox)) {
+            if (HAL_GetTick() - start_ms >= CAN_TX_COMPLETION_TIMEOUT_MS) {
+                taskENTER_CRITICAL();
+                HAL_CAN_AbortTxRequest(hcan_, mailbox);
+                taskEXIT_CRITICAL();
+                return -1;
+            }
+        }
 
         return length;
     }
 
+    CAN::TxResult CAN::TryTransmit(uint16_t id, const uint8_t data[], uint32_t length) {
+        // IS_CAN_DLC(0) is true, but a zero-length classic CAN data frame is not
+        // useful to this interface.
+        if (id > 0x7FF || data == nullptr || length == 0 || !IS_CAN_DLC(length))
+            return TxResult::ERROR;
+
+        // HAL_CAN_AddTxMessage reads all eight bytes even for a shorter DLC.
+        uint8_t tx_data[MAX_CAN_DATA_SIZE] = {0};
+        for (uint32_t i = 0; i < length; ++i) tx_data[i] = data[i];
+        CAN_TxHeaderTypeDef header = {
+            .StdId = id,
+            .ExtId = 0x0,  // don't care since we use standard id mode
+            .IDE = CAN_ID_STD,
+            .RTR = CAN_RTR_DATA,
+            .DLC = length,
+            .TransmitGlobalTime = DISABLE,
+        };
+
+        uint32_t mailbox;
+        TxResult result;
+        taskENTER_CRITICAL();
+        if (hcan_->State != HAL_CAN_STATE_READY && hcan_->State != HAL_CAN_STATE_LISTENING) {
+            // A stopped/errored controller is not ordinary mailbox backpressure.
+            result = TxResult::ERROR;
+        } else if (HAL_CAN_GetTxMailboxesFreeLevel(hcan_) == 0) {
+            result = TxResult::BUSY;
+        } else if (HAL_CAN_AddTxMessage(hcan_, &header, tx_data, &mailbox) == HAL_OK) {
+            result = TxResult::QUEUED;
+        } else {
+            // The only expected rejection after the free-level check is another
+            // task taking the last mailbox; report that as backpressure.
+            result = HAL_CAN_GetTxMailboxesFreeLevel(hcan_) == 0 ? TxResult::BUSY : TxResult::ERROR;
+        }
+        taskEXIT_CRITICAL();
+
+        return result;
+    }
+
     void CAN::RxCallback() {
         CAN_RxHeaderTypeDef header;
-        uint8_t data[MAX_CAN_DATA_SIZE];
-        HAL_CAN_GetRxMessage(hcan_, CAN_RX_FIFO0, &header, data);
+        uint8_t data[MAX_CAN_DATA_SIZE] = {0};
+        if (HAL_CAN_GetRxMessage(hcan_, CAN_RX_FIFO0, &header, data) != HAL_OK)
+            return;
+        // This protocol family is standard-ID data frames only. The filter is
+        // accept-all, so drop frames that do not match.
+        if (header.IDE != CAN_ID_STD || header.RTR != CAN_RTR_DATA)
+            return;
         uint16_t callback_id = header.StdId;
         const auto it = id_to_index_.find(callback_id);
         if (it == id_to_index_.end())
             return;
         callback_id = it->second;
         // find corresponding callback
-        if (rx_callbacks_[callback_id])
+        if (rx_dlc_callbacks_[callback_id])
+            rx_dlc_callbacks_[callback_id](data, header.DLC, rx_dlc_args_[callback_id]);
+        else if (rx_callbacks_[callback_id])
             rx_callbacks_[callback_id](data, rx_args_[callback_id]);
     }
 

@@ -354,7 +354,7 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[3] = alpha + chassis_yaw_omega_target;
 
     if (dbus->swl == remote::DOWN) {
-      feeder_target_velocity = 1.0f;
+      feeder_target_velocity = -1.0f;
     } else {
       feeder_target_velocity = 0.0f;
     }

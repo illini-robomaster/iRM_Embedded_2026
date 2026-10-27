@@ -273,7 +273,7 @@ void RM_RTOS_Default_Task(const void* args) {
   osDelay(100);
 
   bool enabled = false;
-  float yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
+  float yaw_target;
   int16_t yaw_feedback;
   float gimbal_yaw_measured_in_field_reference = 0.0f;
 
@@ -323,7 +323,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
     yaw_target += yaw_omega * 0.005f;
 
-    float delta_yaw = yaw_target - gimbal_yaw_measured_in_field_reference;
+    float delta_yaw = yaw_target;
     float cos = cosf(delta_yaw);
     float sin = sinf(delta_yaw);
     delta_yaw = atan2f(sin, cos);  // wrap to [-pi, pi]
@@ -343,9 +343,8 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // max output for omega while ensure translation
     float max_omega = abs(30.0f - max(fabsf(alpha), fabsf(beta)));
-    float manual_yaw_omega = 0.0f;  //-dbus->ch3 / 660.0f * 15.0f;
     float auto_yaw_omega = dbus->swl == remote::UP ? 15.0f : 0.0f;
-    float chassis_yaw_omega_target = manual_yaw_omega + auto_yaw_omega;
+    float chassis_yaw_omega_target = auto_yaw_omega;
     chassis_yaw_omega_target = clip<float>(chassis_yaw_omega_target, -max_omega, max_omega);
 
     vel[0] = -beta + chassis_yaw_omega_target;

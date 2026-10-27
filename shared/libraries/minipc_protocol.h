@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 #include "bsp_print.h"
 #include "bsp_uart.h"
 #include "cmsis_os.h"
@@ -68,6 +70,20 @@ typedef struct {
 typedef struct {
   float floats[6];
 } __packed arm_data_t;
+
+// Atomic STM32 -> Jetson board-state image shared by UART and Classical CAN.
+// Motor yaw/pitch are intentionally not duplicated; orientation is carried by q.
+constexpr uint8_t MODE_LEN = 1;
+typedef struct {
+  float q[4];  // IMU attitude, w x y z
+  float bullet_speed;
+  uint8_t mode[MODE_LEN];  // opaque
+} __packed board_state_t;
+
+static_assert(sizeof(board_state_t) == 21, "board_state_t layout must stay 21 bytes");
+static_assert(offsetof(board_state_t, q) == 0, "board_state_t.q offset changed");
+static_assert(offsetof(board_state_t, bullet_speed) == 16, "board_state_t.bullet_speed offset changed");
+static_assert(offsetof(board_state_t, mode) == 20, "board_state_t.mode offset changed");
 
 // summary of all information transmitted between minipc and stm32
 typedef struct {

@@ -27,3 +27,7 @@ irm_add_arm_executable(${PROJECT_NAME}_send
 irm_add_arm_executable(${PROJECT_NAME}_receive
     TARGET DJI_Board_TypeC
     SOURCES receive.cc)
+
+irm_add_arm_executable(${PROJECT_NAME}_cv_receive_mc02
+    TARGET DM_MC_02
+    SOURCES cv_receive_mc02.cc)

@@ -48,6 +48,12 @@ void CanBridge::UpdateData(const uint8_t* data) {
     case RELATIVE_ANGLE:
       relative_angle = cmd.data_float;
       break;
+    case RELATIVE_PITCH:
+      relative_pitch = cmd.data_float;
+      break;
+    case CV_FIRE:
+      cv_fire = cmd.data_bool;
+      break;
     case START:
       start = cmd.data_bool;
       break;

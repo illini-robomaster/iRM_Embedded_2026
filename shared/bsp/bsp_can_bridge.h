@@ -61,6 +61,8 @@ typedef enum {
   ARM_TRANSLATE,
   CHASSIS_POWER,
   CHASSIS_POWER_LIMIT,
+  RELATIVE_PITCH,
+  CV_FIRE,
 } can_bridge_cmd;
 
 typedef struct {
@@ -82,7 +84,8 @@ class CanBridge {
   bridge_data_t cmd;
   float vx = 0;
   float vy = 0;
-  float relative_angle = 0;
+  float relative_angle = 0;  // Relative yaw for compatibility with existing senders.
+  float relative_pitch = 0;
   bool start = false;
   int mode = 0;
   bool dead = false;
@@ -102,6 +105,7 @@ class CanBridge {
   float arm_translate = 0;
   float chassis_power = 0;
   unsigned int chassis_power_limit = 0;
+  bool cv_fire = false;  // Advisory only; firing safety remains on the MCU.
   // each bit represents a flag correspond to specific motor e.g.(at index 0, it represents the motor 1's connection flag)
  private:
   bsp::CanInterface* can_;

@@ -164,7 +164,7 @@ void RM_RTOS_Init() {
   motor[2] = new control::MotorDM3519(can, 0x18, 0x19, control::VEL); // back right
   motor[3] = new control::MotorDM3519(can, 0x16, 0x17, control::VEL);  // front left
 
-  gimbal_motor = new control::Motor4310(can, 0x1d, 0x1c, control::MIT);
+  gimbal_motor = new control::Motor4310(can, 0x1c, 0x1d, control::POS_VEL);
   
   yaw_motor = new control::Motor6020(can, 0x205);
   flywheel_motor[0] = new control::Motor3508(can, 0x207);
@@ -184,11 +184,10 @@ void RM_RTOS_Default_Task(const void* args) {
   UNUSED(args);
 
   control::MotorDM3519* motors[] = {motor[0], motor[1], motor[2], motor[3]};
-  control::MotorCANBase* yaw_container[] = {yaw_motor};
   control::Motor4310* gimbal_container[] = {gimbal_motor};
-  control::MotorCANBase* flywheel_motors[] = {flywheel_motor[0], flywheel_motor[1]};
-  control::MotorCANBase* feeder_container[] = {feeder_motor};
+  control::MotorCANBase* dji_container[] = {yaw_motor, flywheel_motor[0], flywheel_motor[1], feeder_motor};
   control::PIDController pid_(40000.0, 0.0, 300000.0);
+  control::PIDController feeder_pid_(40.0, 5.0, 10.0);
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
@@ -201,12 +200,17 @@ void RM_RTOS_Default_Task(const void* args) {
   motor[2]->MotorEnable();
   motor[3]->SetZeroPos();
   motor[3]->MotorEnable();
+  gimbal_motor->MotorEnable();
+  gimbal_motor->SetZeroPos();
   osDelay(100);
 
   bool enabled = false;
   float yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
   int16_t yaw_feedback;
   float gimbal_yaw_measured_in_field_reference = 0.0f;
+
+  float gimbal_pos = 0;
+  float feeder_target_velocity = 0;
 
   while (true) {
     float vel[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -223,7 +227,7 @@ void RM_RTOS_Default_Task(const void* args) {
         motor[1]->MotorDisable();
         motor[2]->MotorDisable();
         motor[3]->MotorDisable();
-        print("Disabled \r\n");
+        print("Disabled \r\n");    
         enabled = false;
       }
       osDelay(100);
@@ -244,8 +248,8 @@ void RM_RTOS_Default_Task(const void* args) {
     gimbal_yaw_measured_in_field_reference = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
 
     float y = -clip<float>(dbus->ch0 / 660.0 * 30.0, -30, 30); // forward
-    float x = clip<float>(dbus->ch1 / 660.0 * 30.0, -30, 30); // left
-    float yaw_omega = clip<float>(-dbus->ch2 / 660.0 * 10.0, -10, 10);               // yaw (slower)
+    float x = clip<float>(dbus->ch1 / 660.0 * 30.0, -30, 30); // left;
+    float yaw_omega = clip<float>(-(dbus->ch2 + 16)  / 660.0 * 10.0, -10, 10);               // yaw (slower)
 
     yaw_target += yaw_omega * 0.005f;
 
@@ -269,7 +273,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // max output for omega while ensure translation
     float max_omega = abs(30.0f - max(fabsf(alpha), fabsf(beta)));
-    float manual_yaw_omega = -dbus->ch3 / 660.0f * 15.0f;
+    float manual_yaw_omega = 0.0f;//-dbus->ch3 / 660.0f * 15.0f;
     float auto_yaw_omega = dbus->swl == remote::UP ? 15.0f : 0.0f;
     float chassis_yaw_omega_target = manual_yaw_omega + auto_yaw_omega;
     chassis_yaw_omega_target = clip<float>(chassis_yaw_omega_target, -max_omega, max_omega);
@@ -279,23 +283,35 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[2] = -alpha + chassis_yaw_omega_target;
     vel[3] = alpha + chassis_yaw_omega_target;
 
-    UNUSED(yaw_feedback);
+    if(dbus->swl == remote::DOWN){
+      feeder_target_velocity = 5.0f;
+    } else {
+      feeder_target_velocity = 0.0f;
+    }
+
+    float feeder_diff = feeder_motor->GetOmegaDelta(feeder_target_velocity);
+    int16_t feeder_output = feeder_pid_.ComputeConstrainedOutput(feeder_diff);
+
+    float gimbal_vel;
+    gimbal_vel = clip<float>(-dbus->ch3 / 660.0 * 30.0, -30, 30);
+    gimbal_pos += gimbal_vel / 200;
+    gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
+
     motor[0]->SetOutput(vel[0]);
     motor[1]->SetOutput(vel[1]);
     motor[2]->SetOutput(vel[2]);
     motor[3]->SetOutput(vel[3]);
-    gimbal_motor->SetOutput(0);
+    gimbal_motor->SetOutput(gimbal_pos, gimbal_vel);
     flywheel_motor[0]->SetOutput(0);
     flywheel_motor[1]->SetOutput(0);
-    feeder_motor->SetOutput(0);
+    feeder_motor->SetOutput(feeder_output);
     float yaw_kF = 400.0f;
     int16_t yaw_output = yaw_feedback + chassis_yaw_omega_target * yaw_kF;
+    
     yaw_motor->SetOutput(yaw_output);
     control::MotorDM3519::TransmitOutput(motors, 4);
-    control::MotorCANBase::TransmitOutput(yaw_container, 1);
     control::Motor4310::TransmitOutput(gimbal_container, 1);
-    control::MotorCANBase::TransmitOutput(flywheel_motors, 2);
-    control::MotorCANBase::TransmitOutput(feeder_container, 1);
+    control::MotorCANBase::TransmitOutput(dji_container, 4);
 
     osDelay(5);
   }

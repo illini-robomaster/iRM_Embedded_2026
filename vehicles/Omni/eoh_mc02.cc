@@ -45,6 +45,9 @@
 
 #define RX_SIGNAL (1 << 0)
 
+// Blocking UART prints stall the control loop (motors hold the last command) -> jerks.
+#define EOH_DEBUG_PRINT 0
+
 // Convert radians to degrees and vice versa
 #define RAD2DEG(x) ((x) * 180.0f / M_PI)
 #define DEG2RAD(x) ((x) * M_PI / 180.0f)
@@ -254,7 +257,11 @@ void RM_RTOS_Default_Task(const void* args) {
 
   control::Motor4310* gimbal_container[] = {gimbal_motor};
   control::MotorCANBase* dji_container[] = {yaw_motor, flywheel_motor[0], flywheel_motor[1], feeder_motor};
-  control::PIDController pid_(40000.0, 0.0, 300000.0);
+  // Yaw PD gains (output units are motor command counts)
+  const float YAW_KP = 20000.0f;
+  const float YAW_KD = 800.0f;        // per rad/s of measured yaw rate
+  const float YAW_MAX_LEAD = 0.6f;    // max rad the target may lead the measured yaw
+  const float YAW_RATE_ALPHA = 0.2f;  // low-pass on measured rate
   control::PIDController feeder_pid_(40.0, 5.0, 10.0);
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
@@ -273,10 +280,15 @@ void RM_RTOS_Default_Task(const void* args) {
   osDelay(100);
 
   bool enabled = false;
-  float yaw_target;
-  int16_t yaw_feedback;
+  float yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
+  float yaw_feedback;
+  float prev_yaw_measured = 0.0f;
+  float yaw_rate_filtered = 0.0f;
   float gimbal_yaw_measured_in_field_reference = 0.0f;
+  prev_yaw_measured = yaw_target;
 
+  uint32_t last_ms = HAL_GetTick();
+  int print_count = 0;
   float gimbal_pos = 0;
   float feeder_target_velocity = 0;
 
@@ -284,11 +296,21 @@ void RM_RTOS_Default_Task(const void* args) {
     BoardStateCanMainTaskStep();
 
     float vel[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    
+    // Real loop time (UART printing can stretch the loop well past 5 ms)
+    uint32_t now_ms = HAL_GetTick();
+    float dt = clip<float>((now_ms - last_ms) / 1000.0f, 0.001f, 0.05f);
+    last_ms = now_ms;
 
-    set_cursor(0, 0);
-    clear_screen();
-    print("CH0: %-4d CH1: %-4d CH2: %-4d CH3: %-4d ", dbus->ch0, dbus->ch1, dbus->ch2, dbus->ch3);
-    print("V0: %-7.2f V1: %-7.2f V2: %-7.2f V3: %-7.2f\r\n", vel[0], vel[1], vel[2], vel[3]);
+    // Throttled debug print (a blocking print every loop jitters the control loop)
+#if EOH_DEBUG_PRINT
+    if (++print_count >= 40) {
+      print_count = 0;
+      set_cursor(0, 0);
+      clear_screen();
+      print("CH0: %-4d CH1: %-4d CH2: %-4d CH3: %-4d \r\n", dbus->ch0, dbus->ch1, dbus->ch2, dbus->ch3);
+    }
+#endif
 
     // disable logic
     if (dbus->swr == remote::DOWN) {
@@ -321,13 +343,26 @@ void RM_RTOS_Default_Task(const void* args) {
     float x = clip<float>(dbus->ch1 / 660.0 * 30.0, -30, 30);                  // left;
     float yaw_omega = clip<float>(-(dbus->ch2 + 16) / 660.0 * 10.0, -10, 10);  // yaw (slower)
 
-    yaw_target += yaw_omega * 0.005f;
+    yaw_target += yaw_omega * dt;
 
     float delta_yaw = yaw_target;
     float cos = cosf(delta_yaw);
     float sin = sinf(delta_yaw);
     delta_yaw = atan2f(sin, cos);  // wrap to [-pi, pi]
-    yaw_feedback = pid_.ComputeConstrainedOutput(delta_yaw);
+
+    // Anti-windup: don't let the target run away from the measured heading when the
+    // stick is held (otherwise the error saturates and flips sign at +-pi -> violent snap)
+    if (fabsf(delta_yaw) > YAW_MAX_LEAD) {
+      delta_yaw = copysignf(YAW_MAX_LEAD, delta_yaw);
+      yaw_target = gimbal_yaw_measured_in_field_reference + delta_yaw;
+    }
+
+    // PD with derivative on the (filtered) measurement: no kick when yaw_target moves
+    float meas_diff = atan2f(sinf(gimbal_yaw_measured_in_field_reference - prev_yaw_measured),
+                             cosf(gimbal_yaw_measured_in_field_reference - prev_yaw_measured));
+    prev_yaw_measured = gimbal_yaw_measured_in_field_reference;
+    yaw_rate_filtered += YAW_RATE_ALPHA * (meas_diff / dt - yaw_rate_filtered);
+    yaw_feedback = YAW_KP * delta_yaw - YAW_KD * yaw_rate_filtered;
 
     float chasis_yaw_measured_in_field_reference = gimbal_yaw_measured_in_field_reference - INS_angle[0];  // in rad
 
@@ -352,7 +387,7 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[2] = -alpha + chassis_yaw_omega_target;
     vel[3] = alpha + chassis_yaw_omega_target;
 
-    if (dbus->swl == remote::DOWN) {
+    if(dbus->swl == remote::DOWN){
       feeder_target_velocity = -1.0f;
     } else {
       feeder_target_velocity = 0.0f;
@@ -362,9 +397,9 @@ void RM_RTOS_Default_Task(const void* args) {
     int16_t feeder_output = feeder_pid_.ComputeConstrainedOutput(feeder_diff);
 
     float gimbal_vel;
-    gimbal_vel = clip<float>(-dbus->ch3 / 660.0 * 30.0, -30, 30);
-    gimbal_pos += gimbal_vel / 200;
-    gimbal_pos = clip<float>(gimbal_pos, -PI / 4, PI / 4);
+    gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
+    gimbal_pos += gimbal_vel * dt;
+    gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
 
     chassis_motor[0]->SetOutput(vel[0]);
     chassis_motor[1]->SetOutput(vel[1]);
@@ -375,8 +410,11 @@ void RM_RTOS_Default_Task(const void* args) {
     flywheel_motor[1]->SetOutput(0);
     feeder_motor->SetOutput(feeder_output);
     float yaw_kF = 400.0f;
-    int16_t yaw_output = yaw_feedback + chassis_yaw_omega_target * yaw_kF;
+    float yaw_output_f = clip<float>(yaw_feedback, -25000.0f, 25000.0f) + chassis_yaw_omega_target * yaw_kF;
+    int16_t yaw_output = (int16_t)clip<float>(yaw_output_f, -30000.0f, 30000.0f);
 
+    print("yaw_output: %-7.2f", yaw_output);
+    
     yaw_motor->SetOutput(yaw_output);
     control::MotorDM3519::TransmitOutput(chassis_motor, 4);
     control::Motor4310::TransmitOutput(gimbal_container, 1);

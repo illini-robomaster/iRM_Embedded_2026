@@ -31,3 +31,7 @@ irm_add_arm_executable(${PROJECT_NAME}_mc02
 irm_add_arm_executable(eoh_infant
     TARGET DM_MC_02
     SOURCES eoh_mc02.cc)
+
+irm_add_arm_executable(dbus_keymouse_mc02
+    TARGET DM_MC_02
+    SOURCES dbus_keymouse_mc02.cc)

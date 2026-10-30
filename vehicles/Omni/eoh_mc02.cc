@@ -53,6 +53,13 @@
 #define RAD2DEG(x) ((x) * 180.0f / M_PI)
 #define DEG2RAD(x) ((x) * M_PI / 180.0f)
 
+// Mouse -> gimbal. DBUS mouse x/y are per-frame displacement counts, so they are
+// integrated as angle increments (no dt) and still pass through the existing soft
+// limits: +/-45 deg on pitch and the YAW_MAX_LEAD clamp on yaw.
+constexpr float MOUSE_YAW_GAIN = 0.0005f;    // rad per count, left/right
+constexpr float MOUSE_PITCH_GAIN = 0.0005f;  // rad per count, up/down
+constexpr float MOUSE_STEP_LIMIT = 0.15f;    // rad, per-loop anti-jump clamp
+
 const osThreadAttr_t imuTaskAttribute = {.name = "imuTask",
                                          .attr_bits = osThreadDetached,
                                          .cb_mem = nullptr,
@@ -456,6 +463,12 @@ void RM_RTOS_Default_Task(const void* args) {
     bool vision_locked = (now_ms - vision_last_obs_ms <= 120);
     float gimbal_vel = 0.0f;
 
+    // Mouse deltas are integrated as angle increments; the soft limits below still apply.
+    const float mouse_yaw_step =
+        clip<float>(-dbus->mouse.x * MOUSE_YAW_GAIN, -MOUSE_STEP_LIMIT, MOUSE_STEP_LIMIT);
+    const float mouse_pitch_step =
+        clip<float>(-dbus->mouse.y * MOUSE_PITCH_GAIN, -MOUSE_STEP_LIMIT, MOUSE_STEP_LIMIT);
+
     constexpr float AUTOAIM_YAW_SMOOTH = 0.16f;
     constexpr float AUTOAIM_PITCH_SMOOTH = 0.15f;
 
@@ -479,10 +492,10 @@ void RM_RTOS_Default_Task(const void* args) {
         gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
         gimbal_vel = 0.0f;
       } else {
-        yaw_target += yaw_omega * dt;
+        yaw_target += yaw_omega * dt + mouse_yaw_step;
         gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
-        gimbal_pos += gimbal_vel * dt;
-        gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
+        gimbal_pos += gimbal_vel * dt + mouse_pitch_step;
+        gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);  // existing soft limit
       }
     } else {
       if (autoaim_active) {
@@ -490,10 +503,10 @@ void RM_RTOS_Default_Task(const void* args) {
       }
       vision_obs_fresh = false;
 
-      yaw_target += yaw_omega * dt;
+      yaw_target += yaw_omega * dt + mouse_yaw_step;
       gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
-      gimbal_pos += gimbal_vel * dt;
-      gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
+      gimbal_pos += gimbal_vel * dt + mouse_pitch_step;
+      gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);  // existing soft limit
     }
 
     float delta_yaw = yaw_target - gimbal_yaw_measured_in_field_reference;

@@ -262,7 +262,9 @@ void RM_RTOS_Default_Task(const void* args) {
   const float YAW_KD = 800.0f;        // per rad/s of measured yaw rate
   const float YAW_MAX_LEAD = 0.6f;    // max rad the target may lead the measured yaw
   const float YAW_RATE_ALPHA = 0.2f;  // low-pass on measured rate
-  control::PIDController feeder_pid_(40.0, 5.0, 10.0);
+  // Use standard CMSIS PIDController with gentle gains for bare motor
+  // Clean anti-windup PI state for bare feeder motor
+  float feeder_integral = 0.0f;
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
@@ -291,6 +293,7 @@ void RM_RTOS_Default_Task(const void* args) {
   int print_count = 0;
   float gimbal_pos = 0;
   float feeder_target_velocity = 0;
+  int feeder_dbg = 0;
 
   while (true) {
     BoardStateCanMainTaskStep();
@@ -302,6 +305,8 @@ void RM_RTOS_Default_Task(const void* args) {
     float dt = clip<float>((now_ms - last_ms) / 1000.0f, 0.001f, 0.05f);
     last_ms = now_ms;
 
+    
+    UNUSED(print_count);
     // Throttled debug print (a blocking print every loop jitters the control loop)
 #if EOH_DEBUG_PRINT
     if (++print_count >= 40) {
@@ -345,7 +350,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
     yaw_target += yaw_omega * dt;
 
-    float delta_yaw = yaw_target;
+    float delta_yaw = yaw_target - gimbal_yaw_measured_in_field_reference;
     float cos = cosf(delta_yaw);
     float sin = sinf(delta_yaw);
     delta_yaw = atan2f(sin, cos);  // wrap to [-pi, pi]
@@ -378,7 +383,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // max output for omega while ensure translation
     float max_omega = abs(30.0f - max(fabsf(alpha), fabsf(beta)));
-    float auto_yaw_omega = dbus->swl == remote::UP ? 15.0f : 0.0f;
+    float auto_yaw_omega = 0.0f; //dbus->swl == remote::UP ? 15.0f : 0.0f;
     float chassis_yaw_omega_target = auto_yaw_omega;
     chassis_yaw_omega_target = clip<float>(chassis_yaw_omega_target, -max_omega, max_omega);
 
@@ -388,13 +393,33 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[3] = alpha + chassis_yaw_omega_target;
 
     if(dbus->swl == remote::DOWN){
-      feeder_target_velocity = -1.0f;
+      feeder_target_velocity = 40.0f;
     } else {
       feeder_target_velocity = 0.0f;
     }
 
-    float feeder_diff = feeder_motor->GetOmegaDelta(feeder_target_velocity);
-    int16_t feeder_output = feeder_pid_.ComputeConstrainedOutput(feeder_diff);
+    int16_t feeder_output = 0;
+    if (feeder_target_velocity == 0.0f) {
+      feeder_integral = 0.0f;
+    } else {
+      float feeder_diff = feeder_motor->GetOmegaDelta(feeder_target_velocity);
+
+      const float FEEDER_KP = 30.0f;
+      const float FEEDER_KI = 20.0f;  // gentle integration eliminates wild speed whipping
+
+      feeder_integral += FEEDER_KI * feeder_diff * dt;
+      feeder_integral = clip<float>(feeder_integral, 0.0f, 800.0f);
+
+      float raw_out = FEEDER_KP * feeder_diff + feeder_integral;
+      raw_out = clip<float>(raw_out, 200.0f, 2500.0f);
+      feeder_output = (int16_t)raw_out;
+
+      if (++feeder_dbg >= 40) {
+        feeder_dbg = 0;
+        print("FEED tgt=%.2f omega=%.2f th=%.2f out=%d int=%.1f\r\n", feeder_target_velocity, feeder_motor->GetOmega(), feeder_motor->GetTheta(),
+              feeder_motor->GetOmega(), (int)feeder_output, feeder_integral);
+      }
+    }
 
     float gimbal_vel;
     gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
@@ -413,7 +438,7 @@ void RM_RTOS_Default_Task(const void* args) {
     float yaw_output_f = clip<float>(yaw_feedback, -25000.0f, 25000.0f) + chassis_yaw_omega_target * yaw_kF;
     int16_t yaw_output = (int16_t)clip<float>(yaw_output_f, -30000.0f, 30000.0f);
 
-    print("yaw_output: %-7.2f", yaw_output);
+    // print("yaw_output: %-7.2f", yaw_output);  // blocking UART print every loop stalls control
     
     yaw_motor->SetOutput(yaw_output);
     control::MotorDM3519::TransmitOutput(chassis_motor, 4);

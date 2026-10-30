@@ -35,6 +35,7 @@
 
 #include "MahonyAHRS.h"
 #include "board_state_can_protocol.h"
+#include "vision_can_protocol.h"
 #include "bsp_imu.h"
 #include "bsp_print.h"
 #include "cmsis_os.h"
@@ -215,6 +216,94 @@ static void BoardStateCanMainTaskStep() {
   }
 }
 
+namespace vision_can = communication::vision_can;
+
+static uint32_t vision_session_id = 0x20261030;
+static bool vision_session_ready = false;
+static uint32_t vision_last_hello_ms = 0;
+static uint32_t vision_last_control_ms = 0;
+static uint8_t vision_control_seq = 0;
+
+static uint8_t vision_ack_rx_data[8] = {};
+static volatile uint32_t vision_ack_rx_seq = 0;
+
+static uint8_t vision_obs_rx_data[8] = {};
+static volatile uint32_t vision_obs_rx_seq = 0;
+
+static vision_can::RelativeObservation latest_vision_obs = {};
+static uint32_t vision_last_obs_ms = 0;
+static bool vision_obs_fresh = false;
+
+static void VisionHelloAckRxCallback(const uint8_t data[], void* args) {
+  (void)args;
+  std::memcpy(vision_ack_rx_data, data, 8);
+  __DMB();
+  ++vision_ack_rx_seq;
+}
+
+static void VisionRelativeRxCallback(const uint8_t data[], void* args) {
+  (void)args;
+  std::memcpy(vision_obs_rx_data, data, 8);
+  __DMB();
+  ++vision_obs_rx_seq;
+}
+
+static void VisionCanMainTaskStep(uint32_t now_ms, bool autoaim_requested) {
+  static uint32_t last_ack_seq = 0;
+  static uint32_t last_obs_seq = 0;
+  uint8_t frame[8];
+
+  if (vision_ack_rx_seq != last_ack_seq) {
+    uint8_t ack_buf[8];
+    taskENTER_CRITICAL();
+    std::memcpy(ack_buf, vision_ack_rx_data, 8);
+    last_ack_seq = vision_ack_rx_seq;
+    taskEXIT_CRITICAL();
+
+    uint32_t rx_session = 0;
+    vision_can::Status rx_status = vision_can::Status::NOT_READY;
+    if (vision_can::DecodeHelloAck(ack_buf, &rx_session, &rx_status)) {
+      if (rx_session == vision_session_id && rx_status == vision_can::Status::READY) {
+        vision_session_ready = true;
+      }
+    }
+  }
+
+  if (vision_obs_rx_seq != last_obs_seq) {
+    uint8_t obs_buf[8];
+    taskENTER_CRITICAL();
+    std::memcpy(obs_buf, vision_obs_rx_data, 8);
+    last_obs_seq = vision_obs_rx_seq;
+    taskEXIT_CRITICAL();
+
+    vision_can::RelativeObservation obs;
+    if (vision_can::DecodeRelativeObservation(obs_buf, &obs)) {
+      if (obs.valid) {
+        latest_vision_obs = obs;
+        vision_last_obs_ms = now_ms;
+        vision_obs_fresh = true;
+      } else {
+        vision_obs_fresh = false;
+      }
+    }
+  }
+
+  if (!vision_session_ready) {
+    if (now_ms - vision_last_hello_ms >= 100) {
+      vision_last_hello_ms = now_ms;
+      vision_can::EncodeHello(frame, vision_session_id);
+      can->Transmit(vision_can::HELLO_CAN_ID, frame, 8);
+    }
+  } else {
+    if (now_ms - vision_last_control_ms >= 80) {
+      vision_last_control_ms = now_ms;
+      vision_can::EncodeControl(frame, vision_session_id, autoaim_requested,
+                                vision_can::Color::RED, vision_control_seq++);
+      can->Transmit(vision_can::CONTROL_CAN_ID, frame, 8);
+    }
+  }
+}
+
 void RM_RTOS_Init() {
   print_use_uart(&huart7);
 
@@ -223,6 +312,12 @@ void RM_RTOS_Init() {
   RM_ASSERT_EQ(can->RegisterRxCallback(board_state_can::JETSON_TO_BOARD_ID,
                                        BoardStateCanRxCallback, nullptr),
                0, "Cannot register Omni board-state CAN callback");
+  RM_ASSERT_EQ(can->RegisterRxCallback(vision_can::HELLO_ACK_CAN_ID,
+                                       VisionHelloAckRxCallback, nullptr),
+               0, "Cannot register vision HELLO_ACK callback");
+  RM_ASSERT_EQ(can->RegisterRxCallback(vision_can::RELATIVE_OBS_CAN_ID,
+                                       VisionRelativeRxCallback, nullptr),
+               0, "Cannot register vision RELATIVE callback");
 
   /* rx_id = Master id
    * tx_id = CAN id
@@ -257,6 +352,9 @@ void RM_RTOS_Default_Task(const void* args) {
 
   control::Motor4310* gimbal_container[] = {gimbal_motor};
   control::MotorCANBase* dji_container[] = {yaw_motor, flywheel_motor[0], flywheel_motor[1], feeder_motor};
+  // Standard RoboMaster feeder PID (from main_mc02.cc)
+  control::PIDController feeder_pid_(40.0f, 5.0f, 10.0f);
+
   // Yaw PD gains (output units are motor command counts)
   const float YAW_KP = 20000.0f;
   const float YAW_KD = 800.0f;        // per rad/s of measured yaw rate
@@ -264,7 +362,6 @@ void RM_RTOS_Default_Task(const void* args) {
   const float YAW_RATE_ALPHA = 0.2f;  // low-pass on measured rate
   // Use standard CMSIS PIDController with gentle gains for bare motor
   // Clean anti-windup PI state for bare feeder motor
-  float feeder_integral = 0.0f;
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
@@ -292,11 +389,19 @@ void RM_RTOS_Default_Task(const void* args) {
   uint32_t last_ms = HAL_GetTick();
   int print_count = 0;
   float gimbal_pos = 0;
-  float feeder_target_velocity = 0;
+  float desired_yaw = 0.0f;
+  float desired_pitch = 0.0f;
+  bool autoaim_active = false;
   int feeder_dbg = 0;
+  int feeder_jam_detect_count = 0;
+  int feeder_jam_pause_count = 0;
+  int feeder_jam_retries = 0;
+  bool feeder_jam_locked = false;
 
   while (true) {
     BoardStateCanMainTaskStep();
+    bool autoaim_requested = (dbus->swr == remote::UP);
+    VisionCanMainTaskStep(HAL_GetTick(), autoaim_requested);
 
     float vel[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     
@@ -348,7 +453,48 @@ void RM_RTOS_Default_Task(const void* args) {
     float x = clip<float>(dbus->ch1 / 660.0 * 30.0, -30, 30);                  // left;
     float yaw_omega = clip<float>(-(dbus->ch2 + 16) / 660.0 * 10.0, -10, 10);  // yaw (slower)
 
-    yaw_target += yaw_omega * dt;
+    bool vision_locked = (now_ms - vision_last_obs_ms <= 120);
+    float gimbal_vel = 0.0f;
+
+    constexpr float AUTOAIM_YAW_SMOOTH = 0.16f;
+    constexpr float AUTOAIM_PITCH_SMOOTH = 0.15f;
+
+    if (autoaim_requested) {
+      if (!autoaim_active) {
+        desired_yaw = gimbal_yaw_measured_in_field_reference;
+        desired_pitch = gimbal_pos;
+        autoaim_active = true;
+      }
+
+      if (vision_obs_fresh && vision_locked) {
+        desired_yaw = gimbal_yaw_measured_in_field_reference + latest_vision_obs.delta_yaw;
+        desired_pitch = clip<float>(gimbal_pos - latest_vision_obs.delta_pitch, -PI/4, PI/4);
+        vision_obs_fresh = false;
+      }
+
+      if (vision_locked) {
+        float yaw_err = atan2f(sinf(desired_yaw - yaw_target), cosf(desired_yaw - yaw_target));
+        yaw_target += AUTOAIM_YAW_SMOOTH * yaw_err;
+        gimbal_pos += AUTOAIM_PITCH_SMOOTH * (desired_pitch - gimbal_pos);
+        gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
+        gimbal_vel = 0.0f;
+      } else {
+        yaw_target += yaw_omega * dt;
+        gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
+        gimbal_pos += gimbal_vel * dt;
+        gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
+      }
+    } else {
+      if (autoaim_active) {
+        autoaim_active = false;
+      }
+      vision_obs_fresh = false;
+
+      yaw_target += yaw_omega * dt;
+      gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
+      gimbal_pos += gimbal_vel * dt;
+      gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
+    }
 
     float delta_yaw = yaw_target - gimbal_yaw_measured_in_field_reference;
     float cos = cosf(delta_yaw);
@@ -392,39 +538,82 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[2] = -alpha + chassis_yaw_omega_target;
     vel[3] = alpha + chassis_yaw_omega_target;
 
-    if(dbus->swl == remote::DOWN){
-      feeder_target_velocity = 40.0f;
+    // Robust 80 rad/s (~760 RPM) Feedforward + Proportional Control:
+    // Uses 1100 counts base feedforward + 25 * error.
+    // Clamped strictly to [200, 3500]:
+    // - Prevents +/-16384 full-current saturation and 900 rad/s wild oscillation.
+    // - At omega=0, delivers 3100 counts breakaway kick immediately.
+    // - In steady state, locks right onto 80 rad/s with ~1100 counts.
+    float feeder_target_velocity = 0.0f;
+    if (dbus->swl == remote::DOWN) {
+      feeder_target_velocity = 160.0f;
     } else {
-      feeder_target_velocity = 0.0f;
+      feeder_jam_detect_count = 0;
+      feeder_jam_pause_count = 0;
+      feeder_jam_retries = 0;
+      feeder_jam_locked = false;
     }
 
     int16_t feeder_output = 0;
-    if (feeder_target_velocity == 0.0f) {
-      feeder_integral = 0.0f;
-    } else {
-      float feeder_diff = feeder_motor->GetOmegaDelta(feeder_target_velocity);
+    if (feeder_target_velocity > 0.0f) {
+      float current_omega = feeder_motor->GetOmega();
 
-      const float FEEDER_KP = 30.0f;
-      const float FEEDER_KI = 20.0f;  // gentle integration eliminates wild speed whipping
+      if (feeder_jam_locked) {
+        feeder_output = 0;
+      } else if (feeder_jam_pause_count > 0) {
+        feeder_jam_pause_count--;
+        if (feeder_jam_pause_count > 20) {
+          // Very gentle micro-reverse (-1.0 A = -820 counts) for 50 ms to un-pinch the wedged ball
+          feeder_output = -820;
+        } else {
+          // Zero-current rest for 100 ms to let mechanism settle
+          feeder_output = 0;
+        }
+      } else {
+        if (current_omega < 15.0f) {
+          if (++feeder_jam_detect_count >= 70) {  // ~350 ms stalled (gives full tank time to spin up)
+            feeder_jam_detect_count = 0;
+            feeder_jam_retries++;
+            if (feeder_jam_retries >= 3) {
+              feeder_jam_locked = true;
+              feeder_output = 0;
+              print("FEED: HARD JAM LOCKED (toggle switch to reset)\r\n");
+            } else {
+              feeder_jam_pause_count = 30;  // 150 ms relief (50 ms @ -1A, 100 ms @ 0A)
+              feeder_output = -820;
+              print("FEED: JAM DETECTED - -1A relief (retry %d/3)\r\n", feeder_jam_retries);
+            }
+          }
+        } else {
+          feeder_jam_detect_count = 0;
+          if (current_omega > 60.0f) {
+            feeder_jam_retries = 0;  // successfully feeding, reset retry count
+          }
+        }
 
-      feeder_integral += FEEDER_KI * feeder_diff * dt;
-      feeder_integral = clip<float>(feeder_integral, 0.0f, 800.0f);
-
-      float raw_out = FEEDER_KP * feeder_diff + feeder_integral;
-      raw_out = clip<float>(raw_out, 200.0f, 2500.0f);
-      feeder_output = (int16_t)raw_out;
+        if (!feeder_jam_locked && feeder_jam_pause_count == 0) {
+          float feeder_diff = feeder_motor->GetOmegaDelta(feeder_target_velocity);
+          float raw_out;
+          if (current_omega < 25.0f) {
+            // Full-tank breakaway boost: delivers ~8400 counts (~10.4 A, 12 Nm) to overcome static ammo column weight
+            raw_out = 2000.0f + 40.0f * feeder_diff;
+            raw_out = clip<float>(raw_out, 1000.0f, 8500.0f);
+          } else {
+            // Normal running mode
+            raw_out = 2000.0f + 25.0f * feeder_diff;
+            raw_out = clip<float>(raw_out, 1000.0f, 6000.0f);
+          }
+          feeder_output = (int16_t)raw_out;
+        }
+      }
 
       if (++feeder_dbg >= 40) {
         feeder_dbg = 0;
-        print("FEED tgt=%.2f omega=%.2f th=%.2f out=%d int=%.1f\r\n", feeder_target_velocity, feeder_motor->GetOmega(), feeder_motor->GetTheta(),
-              feeder_motor->GetOmega(), (int)feeder_output, feeder_integral);
+        print("FEED tgt=%.1f omega=%.1f out=%d\r\n",
+              feeder_target_velocity, current_omega, (int)feeder_output);
       }
     }
 
-    float gimbal_vel;
-    gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
-    gimbal_pos += gimbal_vel * dt;
-    gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
 
     chassis_motor[0]->SetOutput(vel[0]);
     chassis_motor[1]->SetOutput(vel[1]);

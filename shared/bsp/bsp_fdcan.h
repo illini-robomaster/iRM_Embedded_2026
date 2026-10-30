@@ -26,7 +26,7 @@
 #include "fdcan.h"
 
 #define MAX_FDCAN_DATA_SIZE 8
-#define MAX_FDCAN_DEVICES 12
+#define MAX_FDCAN_DEVICES 16
 
 namespace bsp {
 

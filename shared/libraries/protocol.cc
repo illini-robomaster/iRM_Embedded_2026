@@ -33,6 +33,12 @@ static const int BYTE = 8;
 namespace communication {
 
 bool Protocol::Receive(package_t package) {
+  /* A failed read reports a negative length and the callers pass their raw read
+   * result through, so neither that nor an over-long burst may reach the copy below
+   * (bufferRx is MAX_FRAME_LEN bytes). */
+  if (package.data == nullptr || package.length <= 0 || package.length > MAX_FRAME_LEN) {
+    return false;
+  }
   connection_flag_ = true;
   memcpy(bufferRx, package.data, package.length);
   int start_idx;

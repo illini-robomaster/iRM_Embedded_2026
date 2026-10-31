@@ -31,10 +31,34 @@
  *   left/right mouse buttons.
  * - Prints the number of valid frames, the age of the last valid frame, the
  *   observed frame rate and the link state, throttled to 10 Hz.
- * - Judges the link only from frames that pass real validation (frame length,
- *   UART error flags, all-zero frame, stick range, switch range) and from frame
- *   freshness. `remote::DBUS::connection_flag_` is NOT used here because the
- *   shared driver sets it on any idle interrupt, even for a torn frame.
+ * - Judges the link only from bursts that pass real validation (burst length,
+ *   UART reception errors reported before the HAL clears them, all-zero frame,
+ *   stick range, switch range) and from frame freshness.
+ *   `remote::DBUS::connection_flag_` is NOT used here because that driver is
+ *   written for the control loops and tolerates more than a diagnostic should.
+ * - Reports the live UART5 register state and the receive-chain bits at boot, so
+ *   "no data" can be told apart from a wrong baud rate, a missing DMAR request or
+ *   a stopped DMA stream.
+ *
+ * Framing policy (strict, no guessing):
+ * - A burst is only decoded when its length is an exact multiple of 18 bytes and
+ *   it fits in the RX buffer (one or two frames). Neither the first 18 bytes of a
+ *   longer burst nor a ragged burst are trusted: a single dropped or extra byte
+ *   shifts every following bit field, and no parity/checksum protects the payload.
+ * - A burst that overlaps a UART reception error is discarded by bsp::UART::Read,
+ *   which reports the burst as a read failure (-1) after re-arming the receive
+ *   chain. The error count comes from the HAL error callback when the HAL delivers
+ *   it and otherwise from the ErrorCode that Read() polls, because a DMA reception
+ *   only reaches the callback through a stream abort callback that polling-mode
+ *   reception never runs (see bsp_uart_rx.h).
+ * - A burst that fills the whole RX buffer is reported by its length and counted as
+ *   truncation, not as a reception error.
+ * - A rejected burst never refreshes the link state and never overwrites the
+ *   newest valid sample.
+ *
+ * Budget: 8E1 is 11 bit times per byte, one frame is 18 bytes = 198 bit times, so
+ * 100000 baud allows at most 100000 / 198 = 505 frames/s with no idle gap between
+ * frames. Anything above that (555/s and higher) is not physically possible.
  *
  * What it does NOT do:
  * - No chassis / gimbal / feeder / shooter output, no CAN, no IMU, no autoaim.
@@ -53,17 +77,12 @@
 #include "bsp_print.h"
 #include "cmsis_os.h"
 #include "dbus.h"
+#include "dbus_frame.h"
 #include "main.h"
 #include "task.h"
 
 namespace {
 
-/* ---------------------------------------------------------------- protocol */
-
-/* A DBUS burst is always 18 bytes: 4 x 11 bit sticks + 2 x 2 bit switches,
- * 3 x 16 bit mouse axes + 2 x 8 bit mouse buttons, 16 bit keyboard, 11 bit
- * wheel (padded to 16 bit). */
-constexpr uint32_t kFrameBytes = 18;
 constexpr uint32_t kChannelCount = 4;
 
 /* DR16 raw stick range from the DJI specification (mid position is 1024). */
@@ -77,6 +96,10 @@ constexpr uint32_t kDbusBaudRate = 100000;
 constexpr uint32_t kReportPeriodMs = 100; /* 10 Hz */
 constexpr uint32_t kLinkTimeoutMs = 100;  /* 100 ms without a valid frame -> lost */
 constexpr uint32_t kTaskTickMs = 10;
+
+/* Accepted tolerance when the programmed divider is compared with the requested
+ * baud rate (the divider is an integer, so the real rate is never exact). */
+constexpr uint32_t kBaudTolerance = kDbusBaudRate / 200u; /* 0.5 % */
 
 /**
  * @brief DBUS frame layout, identical to the one used by shared/libraries/dbus.cc.
@@ -98,7 +121,7 @@ typedef struct {
 
 /* Compile-time proof of the layout: a build error here means the frame format
  * no longer matches the DR16 payload and every decoded value would be garbage. */
-static_assert(sizeof(dbus_frame_t) == static_cast<size_t>(kFrameBytes),
+static_assert(sizeof(dbus_frame_t) == static_cast<size_t>(remote::kDbusFrameBytes),
               "DBUS frame must be 18 bytes");
 static_assert(offsetof(dbus_frame_t, mouse) == static_cast<size_t>(6),
               "mouse payload must start at byte 6");
@@ -149,9 +172,10 @@ const char* SwitchName(uint8_t value) {
  */
 class DBUSKeyMouseMonitor : public bsp::UART {
  public:
-  explicit DBUSKeyMouseMonitor(UART_HandleTypeDef* huart)
-      : UART(huart) {
-    SetupRx(kFrameBytes + 1);
+  explicit DBUSKeyMouseMonitor(UART_HandleTypeDef* huart) : UART(huart) {
+    /* Room for the largest accepted burst plus one byte, so a burst that fills the
+     * buffer is recognised as truncated instead of being decoded. */
+    SetupRx(remote::kDbusBurstBufferBytes);
   }
 
   /** @brief Consistent copy of the monitor state, taken in a critical section. */
@@ -160,11 +184,16 @@ class DBUSKeyMouseMonitor : public bsp::UART {
     uint32_t rx_events;
     uint32_t frames;
     uint32_t valid_frames;
-    uint32_t short_frames;
-    uint32_t partial_frames;
+    uint32_t short_bursts;
+    uint32_t ragged_bursts;
+    uint32_t truncated_bursts;
+    uint32_t error_bursts;
     uint32_t invalid_frames;
     uint32_t zero_frames;
     uint32_t uart_errors;
+    uint32_t uart_last_error;
+    uint32_t rearrms;
+    uint32_t rearm_failures;
     int32_t age_ms;      /* time since the last valid frame, -1 if none yet */
     int32_t interval_ms; /* gap between the last two valid frames */
     uint16_t ch[kChannelCount];
@@ -187,11 +216,12 @@ class DBUSKeyMouseMonitor : public bsp::UART {
   volatile uint32_t rx_events_ = 0;
   volatile uint32_t frames_ = 0;
   volatile uint32_t valid_frames_ = 0;
-  volatile uint32_t short_frames_ = 0;
-  volatile uint32_t partial_frames_ = 0;
+  volatile uint32_t short_bursts_ = 0;
+  volatile uint32_t ragged_bursts_ = 0;
+  volatile uint32_t truncated_bursts_ = 0;
+  volatile uint32_t error_bursts_ = 0;
   volatile uint32_t invalid_frames_ = 0;
   volatile uint32_t zero_frames_ = 0;
-  volatile uint32_t uart_errors_ = 0;
   volatile uint32_t last_rx_ms_ = 0;
   volatile uint32_t last_valid_ms_ = 0;
   volatile int32_t interval_ms_ = -1;
@@ -252,38 +282,49 @@ void DBUSKeyMouseMonitor::StoreFrame(const dbus_frame_t& frame, uint32_t now_ms)
  * @brief Idle-line interrupt entry point: read the burst and validate it.
  *
  * Rejection reasons are counted separately so the log tells wiring problems
- * (no bytes / UART errors) apart from protocol problems (torn frame, remote
+ * (no bytes / UART errors) apart from protocol problems (torn burst, remote
  * powered off, sticks out of calibration).
  */
 void DBUSKeyMouseMonitor::RxCompleteCallback() {
   uint8_t* data = nullptr;
-  const int32_t length = Read<true>(&data); /* also re-arms the RX DMA */
+  /* also re-arms the RX DMA, and reports -1 for a burst that a UART error
+   * polluted (the BSP discards it instead of handing out a torn buffer) */
+  const int32_t length = Read<true>(&data);
   const uint32_t now_ms = HAL_GetTick();
 
   ++rx_events_;
   last_rx_ms_ = now_ms;
 
-  /* Parity / framing / noise / overrun: this burst is not trustworthy even if
-   * its length happens to match. */
-  if ((huart_->Instance->ISR & (USART_ISR_PE | USART_ISR_FE | USART_ISR_NE | USART_ISR_ORE)) != 0u) {
-    ++uart_errors_;
+  if (length < 0) {
+    ++error_bursts_;
     return;
   }
 
-  if (length <= 0) return; /* idle interrupt without data */
-  if (length < static_cast<int32_t>(kFrameBytes)) {
-    ++short_frames_;
-    return;
+  const remote::DbusBurst burst = remote::ParseDbusBurst(data, length, rx_size_);
+  switch (burst.status) {
+    case remote::DbusBurstStatus::kEmpty:
+      return; /* idle interrupt without data */
+    case remote::DbusBurstStatus::kTooShort:
+      ++short_bursts_;
+      return;
+    case remote::DbusBurstStatus::kRagged:
+      /* A ragged burst means the burst boundary is polluted: the frame inside it
+       * cannot be trusted, so it does not refresh the link state either. */
+      ++ragged_bursts_;
+      return;
+    case remote::DbusBurstStatus::kTruncated:
+      ++truncated_bursts_;
+      return;
+    case remote::DbusBurstStatus::kAccepted:
+      break;
   }
 
-  const uint32_t complete_frames = static_cast<uint32_t>(length) / kFrameBytes;
-  if ((static_cast<uint32_t>(length) % kFrameBytes) != 0u) ++partial_frames_;
-  frames_ += complete_frames;
+  frames_ += burst.frame_count;
 
   /* Use the newest complete frame of the burst: two frames back to back are
    * possible when the idle gap between them is too short to trigger the ISR. */
-  const dbus_frame_t* frame =
-      reinterpret_cast<const dbus_frame_t*>(data + (complete_frames - 1u) * kFrameBytes);
+  const dbus_frame_t* frame = reinterpret_cast<const dbus_frame_t*>(
+      burst.data + (burst.frame_count - 1u) * static_cast<uint32_t>(remote::kDbusFrameBytes));
 
   bool all_zero = false;
   if (!IsPlausible(*frame, &all_zero)) {
@@ -306,11 +347,12 @@ DBUSKeyMouseMonitor::Snapshot DBUSKeyMouseMonitor::TakeSnapshot(uint32_t now_ms)
   snapshot.rx_events = rx_events_;
   snapshot.frames = frames_;
   snapshot.valid_frames = valid_frames_;
-  snapshot.short_frames = short_frames_;
-  snapshot.partial_frames = partial_frames_;
+  snapshot.short_bursts = short_bursts_;
+  snapshot.ragged_bursts = ragged_bursts_;
+  snapshot.truncated_bursts = truncated_bursts_;
+  snapshot.error_bursts = error_bursts_;
   snapshot.invalid_frames = invalid_frames_;
   snapshot.zero_frames = zero_frames_;
-  snapshot.uart_errors = uart_errors_;
   snapshot.interval_ms = interval_ms_;
   for (uint32_t i = 0; i < kChannelCount; ++i) snapshot.ch[i] = ch_[i];
   snapshot.mouse = mouse_;
@@ -321,6 +363,13 @@ DBUSKeyMouseMonitor::Snapshot DBUSKeyMouseMonitor::TakeSnapshot(uint32_t now_ms)
   snapshot.age_ms = have_valid_frame_ ? static_cast<int32_t>(now_ms - last_valid_ms_) : -1;
   last_rx_ms = last_rx_ms_;
   taskEXIT_CRITICAL();
+
+  snapshot.rearrms = RxRearmCount();
+  snapshot.rearm_failures = RxRearmFailures();
+  /* read from the BSP so an error the HAL callback reported and one taken from
+   * huart->ErrorCode are both visible; each error is still counted once only */
+  snapshot.uart_errors = RxErrorCount();
+  snapshot.uart_last_error = RxLastErrorCode();
 
   /* Freshness decides the link state, never the bare presence of interrupts. */
   const bool recent_valid =
@@ -341,24 +390,61 @@ DBUSKeyMouseMonitor::Snapshot DBUSKeyMouseMonitor::TakeSnapshot(uint32_t now_ms)
 DBUSKeyMouseMonitor* monitor = nullptr;
 
 /**
- * @brief One-shot check of the CubeMX UART5 configuration.
+ * @brief One-shot self check of UART5: CubeMX configuration plus live registers.
  *
- * A wrong baud rate, word length, parity or an unarmed RX DMA explains "no data
- * at all" much more often than the remote does, so it is reported at boot.
+ * huart->Init only holds what MX_UART5_Init() requested and a non-null hdmarx only
+ * says that a DMA handle was assigned; neither proves that the peripheral really
+ * runs 100 kbaud 8E1 or that the receive path is armed. The check below therefore
+ * reads the peripheral registers and the DMA stream enable bit:
+ * - UART5 is clocked through RCC_CDCCIP2R.USART234578SEL, not unconditionally from
+ *   PCLK1 (usart.c selects RCC_USART234578CLKSOURCE_D2PCLK1). With 16x
+ *   oversampling and that mux setting BRR = PCLK1 / baud, so the divider is only
+ *   decoded into a baud rate while the mux still selects PCLK1; any other source
+ *   reports a mismatch instead of a wrong rate.
+ * - M1/M0 encode the word length, PCE/PS the parity, STOP the stop bits.
+ * - CR3.DMAR is the UART DMA request, CR3.EIE/CR1.PEIE the error interrupts and
+ *   CR1.IDLEIE the idle-line interrupt, i.e. the bits a stopped chain loses.
  */
-void PrintDbusUartConfig() {
+void PrintDbusUartCheck() {
   UART_HandleTypeDef* huart = &huart5;
-  const bool config_ok = huart->Init.BaudRate == kDbusBaudRate &&
-                         huart->Init.WordLength == UART_WORDLENGTH_9B &&
-                         huart->Init.Parity == UART_PARITY_EVEN &&
-                         huart->Init.StopBits == UART_STOPBITS_1 &&
-                         huart->Init.Mode == UART_MODE_TX_RX;
-  const bool dma_ok = huart->hdmarx != nullptr;
-  print("[DBUS] UART5 cfg: baud=%u word_len=%u parity=%u stop=%u mode=%u dma=%u rx_state=%u -> %s\r\n",
+  const uint32_t cr1 = huart->Instance->CR1;
+  const uint32_t cr2 = huart->Instance->CR2;
+  const uint32_t brr = huart->Instance->BRR & 0xFFFFu;
+  const uint32_t uart5_clk_source = __HAL_RCC_GET_USART234578_SOURCE();
+  const bool uart5_from_pclk1 = uart5_clk_source == RCC_USART234578CLKSOURCE_D2PCLK1;
+  const uint32_t pclk1 = HAL_RCC_GetPCLK1Freq();
+  const uint32_t implied_baud = (uart5_from_pclk1 && brr != 0u) ? pclk1 / brr : 0u;
+  const uint32_t baud_delta = implied_baud > kDbusBaudRate ? implied_baud - kDbusBaudRate
+                                                           : kDbusBaudRate - implied_baud;
+
+  const bool baud_ok = uart5_from_pclk1 && brr != 0u && baud_delta <= kBaudTolerance;
+  const bool word_9bit = (cr1 & USART_CR1_M1) != 0u && (cr1 & USART_CR1_M0) == 0u;
+  const bool parity_even = (cr1 & USART_CR1_PCE) != 0u && (cr1 & USART_CR1_PS) == 0u;
+  const bool stop_1bit = (cr2 & USART_CR2_STOP) == 0u;
+  const bool tx_rx = (cr1 & USART_CR1_TE) != 0u && (cr1 & USART_CR1_RE) != 0u;
+
+  /* CR3.DMAR, the RX DMA stream enable bit and the interrupt enables, read through
+   * the BSP so no DMA register detail leaks into this file. */
+  const bsp::RxChainSnapshot chain = monitor->RxChain();
+
+  print("[DBUS] UART5 request: baud=%u word_len=%u parity=%u stop=%u mode=%u (CubeMX Init values)\r\n",
         static_cast<unsigned>(huart->Init.BaudRate), static_cast<unsigned>(huart->Init.WordLength),
         static_cast<unsigned>(huart->Init.Parity), static_cast<unsigned>(huart->Init.StopBits),
-        static_cast<unsigned>(huart->Init.Mode), dma_ok ? 1u : 0u,
-        static_cast<unsigned>(huart->RxState), (config_ok && dma_ok) ? "OK" : "MISMATCH");
+        static_cast<unsigned>(huart->Init.Mode));
+  print("[DBUS] UART5 regs: brr=%u pclk1=%u clk_sel=%u implied_baud=%u 9bit=%u even=%u 1stop=%u te_re=%u\r\n",
+        static_cast<unsigned>(brr), static_cast<unsigned>(pclk1),
+        static_cast<unsigned>(uart5_clk_source), static_cast<unsigned>(implied_baud),
+        word_9bit ? 1u : 0u, parity_even ? 1u : 0u, stop_1bit ? 1u : 0u, tx_rx ? 1u : 0u);
+  print("[DBUS] UART5 chain: dmar=%u err_irq=%u idle_irq=%u dma_stream=%u rearm=%u rearm_fail=%u -> %s\r\n",
+        chain.uart_dma_request ? 1u : 0u, chain.error_irq_enabled ? 1u : 0u,
+        chain.idle_irq_enabled ? 1u : 0u, chain.dma_stream_enabled ? 1u : 0u,
+        static_cast<unsigned>(monitor->RxRearmCount()),
+        static_cast<unsigned>(monitor->RxRearmFailures()),
+        (baud_ok && word_9bit && parity_even && stop_1bit && tx_rx && chain.uart_dma_request &&
+         chain.error_irq_enabled && chain.parity_irq_enabled && chain.idle_irq_enabled &&
+         chain.dma_stream_enabled)
+            ? "OK"
+            : "MISMATCH");
 }
 
 }  // namespace
@@ -373,7 +459,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
   print("\r\n[DBUS] keyboard/mouse diagnostic for DM_MC_02 (read only, no motors)\r\n");
   print("[DBUS] chain: PC -> RoboMaster Client -> USB -> DT7 -> DR16 -> UART5\r\n");
-  PrintDbusUartConfig();
+  PrintDbusUartCheck();
 
   LinkState last_state = LinkState::kNoSignal;
   uint32_t last_report_ms = HAL_GetTick();
@@ -393,12 +479,17 @@ void RM_RTOS_Default_Task(const void* args) {
         last_state = s.state;
       }
 
-      print("[DBUS] link=%s age=%dms frames=%u valid=%u rate=%u/s short=%u partial=%u bad=%u zero=%u uart_err=%u\r\n",
+      print("[DBUS] link=%s age=%dms frames=%u valid=%u rate=%u/s short=%u ragged=%u trunc=%u bad=%u zero=%u\r\n",
             StateName(s.state), static_cast<int>(s.age_ms), static_cast<unsigned>(s.frames),
             static_cast<unsigned>(s.valid_frames), static_cast<unsigned>(rate),
-            static_cast<unsigned>(s.short_frames), static_cast<unsigned>(s.partial_frames),
-            static_cast<unsigned>(s.invalid_frames), static_cast<unsigned>(s.zero_frames),
-            static_cast<unsigned>(s.uart_errors));
+            static_cast<unsigned>(s.short_bursts), static_cast<unsigned>(s.ragged_bursts),
+            static_cast<unsigned>(s.truncated_bursts), static_cast<unsigned>(s.invalid_frames),
+            static_cast<unsigned>(s.zero_frames));
+
+      print("[DBUS] rx: uart_err=%u last_err=0x%x err_bursts=%u rearm=%u rearm_fail=%u\r\n",
+            static_cast<unsigned>(s.uart_errors), static_cast<unsigned>(s.uart_last_error),
+            static_cast<unsigned>(s.error_bursts), static_cast<unsigned>(s.rearrms),
+            static_cast<unsigned>(s.rearm_failures));
 
       print("[DBUS] key W=%d A=%d S=%d D=%d SHIFT=%d CTRL=%d | mouse dx=%d dy=%d dz=%d L=%u R=%u | wheel=%u swl=%s swr=%s ch=%u,%u,%u,%u\r\n",
             static_cast<int>(s.keyboard.bit.W), static_cast<int>(s.keyboard.bit.A),

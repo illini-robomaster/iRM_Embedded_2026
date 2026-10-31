@@ -24,6 +24,8 @@
 #include <cstring>
 
 #include "bsp_error_handler.h"
+#include "cmsis_os.h"
+#include "task.h"
 
 /* rocker range and dead-zones */
 #define RC_ROCKER_MID 1024
@@ -40,7 +42,7 @@ typedef struct {
   uint16_t ch1 : 11;  //   C3-^       ^-C1
   uint16_t ch2 : 11;  // C2-<   >+ -<   >+C0
   uint16_t ch3 : 11;  //     +v       v+
-  
+
   /* left and right switch information */
   uint8_t swr : 2;
   uint8_t swl : 2;
@@ -50,37 +52,90 @@ typedef struct {
   /* keyboard key information */
   remote::keyboard_t keyboard;
   remote::wheel_t wheel;  // Analog range: Mid(steady state): 1024, Upmax: around 6960 Downmax: around 0
-                          // Digital range: Down: 1684 (below analog signal range) 
+                          // Digital range: Down: 1684 (below analog signal range)
 } __packed dbus_t;
 
-DBUS::DBUS(UART_HandleTypeDef* huart) : bsp::UART(huart) { SetupRx(sizeof(dbus_t) + 1); }
+DBUS::DBUS(UART_HandleTypeDef* huart) : bsp::UART(huart) { SetupRx(kDbusBurstBufferBytes); }
 
 void DBUS::RxCompleteCallback() {
+  uint8_t* data = nullptr;
+  /* also re-arms the RX DMA and reports -1 when the burst was polluted by a UART
+   * error; such a burst has neither a trustworthy length nor trustworthy content */
+  const int32_t length = this->Read<true>(&data);
+  if (length < 0) {
+    ++rejected_bursts_;
+    return;
+  }
+
+  const uint32_t now_ms = HAL_GetTick();
+  const DbusBurst burst = ParseDbusBurst(data, length, rx_size_);
+
+  if (burst.status == DbusBurstStatus::kEmpty) return; /* idle interrupt without data */
+  if (burst.status != DbusBurstStatus::kAccepted) {
+    /* A torn or truncated burst shifts every following bit field, so it neither
+     * updates the state nor reports a connection: the previous frame stays the
+     * newest valid sample. */
+    ++rejected_bursts_;
+    return;
+  }
+
   connection_flag_ = true;
 
-  uint8_t* data;
-  // data frame misalignment
-  if (this->Read<true>(&data) != sizeof(dbus_t)) return;
+  for (uint32_t i = 0; i < burst.frame_count; ++i) {
+    /* re-interpret the data buffer and decode into class properties */
+    const dbus_t* repr =
+        reinterpret_cast<const dbus_t*>(burst.data + i * static_cast<uint32_t>(kDbusFrameBytes));
 
-  // re-interpret the data buffer and decode into class properties
-  dbus_t* repr = reinterpret_cast<dbus_t*>(data);
-  this->ch0 = repr->ch0 - RC_ROCKER_MID;
-  this->ch1 = repr->ch1 - RC_ROCKER_MID;
-  this->ch2 = repr->ch2 - RC_ROCKER_MID;
-  this->ch3 = repr->ch3 - RC_ROCKER_MID;
-  this->ch0 = abs(this->ch0) <= RC_ROCKER_ZERO_DRIFT ? 0 : this->ch0;
-  this->ch1 = abs(this->ch1) <= RC_ROCKER_ZERO_DRIFT ? 0 : this->ch1;
-  this->ch2 = abs(this->ch2) <= RC_ROCKER_ZERO_DRIFT ? 0 : this->ch2;
-  this->ch3 = abs(this->ch3) <= RC_ROCKER_ZERO_DRIFT ? 0 : this->ch3;
+    /* every frame carries a displacement, so all of them are accumulated; a poll
+     * between two bursts must not lose the frames it did not see */
+    mouse_delta_.Accumulate(repr->mouse.x, repr->mouse.y, now_ms);
 
-  this->swl = static_cast<switch_t>(repr->swl);
-  this->swr = static_cast<switch_t>(repr->swr);
+    this->ch0 = repr->ch0 - RC_ROCKER_MID;
+    this->ch1 = repr->ch1 - RC_ROCKER_MID;
+    this->ch2 = repr->ch2 - RC_ROCKER_MID;
+    this->ch3 = repr->ch3 - RC_ROCKER_MID;
+    this->ch0 = abs(this->ch0) <= RC_ROCKER_ZERO_DRIFT ? 0 : this->ch0;
+    this->ch1 = abs(this->ch1) <= RC_ROCKER_ZERO_DRIFT ? 0 : this->ch1;
+    this->ch2 = abs(this->ch2) <= RC_ROCKER_ZERO_DRIFT ? 0 : this->ch2;
+    this->ch3 = abs(this->ch3) <= RC_ROCKER_ZERO_DRIFT ? 0 : this->ch3;
 
-  memcpy(&this->mouse, &repr->mouse, sizeof(mouse_t));
-  memcpy(&this->keyboard, &repr->keyboard, sizeof(keyboard_t));
-  memcpy(&this->wheel, &repr->wheel, sizeof(wheel_t));
+    this->swl = static_cast<switch_t>(repr->swl);
+    this->swr = static_cast<switch_t>(repr->swr);
 
-  this->timestamp = HAL_GetTick();
+    memcpy(&this->mouse, &repr->mouse, sizeof(mouse_t));
+    memcpy(&this->keyboard, &repr->keyboard, sizeof(keyboard_t));
+    memcpy(&this->wheel, &repr->wheel, sizeof(wheel_t));
+
+    this->timestamp = now_ms;
+  }
+}
+
+bool DBUS::TakeMouseDelta(mouse_t* delta) {
+  int16_t dx = 0;
+  int16_t dy = 0;
+  bool fresh;
+
+  /* the receive callback runs in the UART interrupt, the consumer in a task: the
+   * take and clear has to be atomic with respect to the accumulation */
+  taskENTER_CRITICAL();
+  fresh = mouse_delta_.Take(&dx, &dy, HAL_GetTick());
+  taskEXIT_CRITICAL();
+
+  if (delta) {
+    /* only x / y carry per-frame displacement; z, l and r are per-frame state */
+    delta->x = dx;
+    delta->y = dy;
+    delta->z = 0;
+    delta->l = 0;
+    delta->r = 0;
+  }
+  return fresh;
+}
+
+void DBUS::DiscardMouseDelta() {
+  taskENTER_CRITICAL();
+  mouse_delta_.Discard();
+  taskEXIT_CRITICAL();
 }
 
 } /* namespace remote */

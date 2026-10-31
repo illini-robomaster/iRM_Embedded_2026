@@ -39,8 +39,12 @@ SBUS::SBUS(UART_HandleTypeDef* huart) : bsp::UART(huart) { SetupRx(SBUS_RX_LEN +
 void SBUS::RxCompleteCallback() {
   connection_flag_ = true;
 
-  uint8_t* data;
-  this->Read<true>(&data);
+  uint8_t* data = nullptr;
+  const int32_t length = this->Read<true>(&data);
+
+  /* A negative length means the burst was discarded (UART reception error), a short
+   * one that it is not a whole frame: neither may be decoded. */
+  if (length < SBUS_RX_LEN || data == nullptr) return;
 
   if (data[0] != START_BYTE) return;
 

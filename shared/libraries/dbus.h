@@ -21,6 +21,8 @@
 #pragma once
 
 #include "bsp_uart.h"
+#include "dbus_frame.h"
+#include "dbus_mouse.h"
 
 namespace remote {
 
@@ -79,6 +81,43 @@ class DBUS : public bsp::UART {
   // Add custom rx data handler
   void RxCompleteCallback() override final;
 
+  /**
+   * @brief take the mouse displacement accumulated since the previous call
+   *
+   * A frame carries the displacement since the previous frame, not a position:
+   * reading `mouse` on every control iteration integrates the same frame again
+   * and drops every frame that arrived in between. TakeMouseDelta() consumes the
+   * displacement exactly once, sums every frame received since the previous call
+   * and saturates at the int16 range. Displacement that went stale
+   * (remote::kMouseDeltaStaleMs without a new frame, e.g. after the link was
+   * lost) is dropped, so a lost link cannot keep moving the gimbal.
+   *
+   * @param delta receives the accumulated displacement, zeroed when the result is
+   *              false
+   * @return true when fresh displacement was available
+   */
+  bool TakeMouseDelta(mouse_t* delta);
+
+  /**
+   * @brief drop the pending mouse displacement
+   *
+   * Meant for output-disabled phases and mode switches so that movement which
+   * arrived while the gimbal was not listening is not replayed later.
+   */
+  void DiscardMouseDelta();
+
+  /** @brief number of axes whose accumulated displacement had to be saturated. */
+  uint32_t mouse_delta_overflows() const { return mouse_delta_.overflow_count(); }
+
+  /**
+   * @brief number of bursts dropped instead of decoded
+   *
+   * Counts torn (ragged or short), truncated and error-polluted bursts; the previous
+   * valid frame stays the newest sample. A burst the BSP discarded after a reception
+   * error is counted here too.
+   */
+  uint32_t rejected_bursts() const { return rejected_bursts_; }
+
   // rocker channel information
   int16_t ch0;  // S1*             *S2
   int16_t ch1;  //   C3-^       ^-C1
@@ -88,6 +127,9 @@ class DBUS : public bsp::UART {
   switch_t swl;
   switch_t swr;
   // mouse movement and button information
+  // NOTE: the newest frame only; it is not consumed, so a control loop that uses it
+  // integrates the same displacement on every iteration. Use TakeMouseDelta() to
+  // consume displacement exactly once.
   mouse_t mouse;
   // keyboard key information
   keyboard_t keyboard;
@@ -100,7 +142,11 @@ class DBUS : public bsp::UART {
 
   static const int16_t ROCKER_MIN = -660;
   static const int16_t ROCKER_MAX = 660;
-  uint16_t previous_wheel_value; 
+  uint16_t previous_wheel_value;
+
+ private:
+  MouseDeltaAccumulator mouse_delta_;
+  volatile uint32_t rejected_bursts_ = 0;
 };
 
 } /* namespace remote */

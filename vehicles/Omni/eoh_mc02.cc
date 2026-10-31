@@ -41,6 +41,7 @@
 #include "cmsis_os.h"
 #include "dbus.h"
 #include "main.h"
+#include "mouse_gimbal_step.h"
 #include "motor.h"
 #include "spi.h"
 
@@ -53,12 +54,8 @@
 #define RAD2DEG(x) ((x) * 180.0f / M_PI)
 #define DEG2RAD(x) ((x) * M_PI / 180.0f)
 
-// Mouse -> gimbal. DBUS mouse x/y are per-frame displacement counts, so they are
-// integrated as angle increments (no dt) and still pass through the existing soft
-// limits: +/-45 deg on pitch and the YAW_MAX_LEAD clamp on yaw.
-constexpr float MOUSE_YAW_GAIN = 0.0005f;    // rad per count, left/right
-constexpr float MOUSE_PITCH_GAIN = 0.0005f;  // rad per count, up/down
-constexpr float MOUSE_STEP_LIMIT = 0.15f;    // rad, per-loop anti-jump clamp
+// Mouse -> gimbal scaling, per-iteration clamp and the "apply or drop" policy live
+// in mouse_gimbal_step.h so they can be regression tested on the host.
 
 const osThreadAttr_t imuTaskAttribute = {.name = "imuTask",
                                          .attr_bits = osThreadDetached,
@@ -411,7 +408,17 @@ void RM_RTOS_Default_Task(const void* args) {
     VisionCanMainTaskStep(HAL_GetTick(), autoaim_requested);
 
     float vel[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    
+
+    // Consume the DBUS mouse displacement exactly once per iteration. A DBUS frame
+    // carries a displacement, so reading dbus->mouse here would integrate the same
+    // frame again on every pass (and keep integrating the last non-zero value after
+    // the link dropped), while every frame that arrived between two passes would be
+    // lost. TakeMouseDelta() sums all frames since the previous pass, drops
+    // displacement that went stale and clears it, so a step that is not applied
+    // below is dropped instead of being replayed when the gimbal listens again.
+    remote::mouse_t mouse_delta = {};
+    dbus->TakeMouseDelta(&mouse_delta);
+
     // Real loop time (UART printing can stretch the loop well past 5 ms)
     uint32_t now_ms = HAL_GetTick();
     float dt = clip<float>((now_ms - last_ms) / 1000.0f, 0.001f, 0.05f);
@@ -438,6 +445,8 @@ void RM_RTOS_Default_Task(const void* args) {
         chassis_motor[3]->MotorDisable();
         print("Disabled \r\n");
         enabled = false;
+        // Nothing of what happened during the shutdown belongs to the next move.
+        dbus->DiscardMouseDelta();
       }
       osDelay(100);
       continue;
@@ -449,6 +458,11 @@ void RM_RTOS_Default_Task(const void* args) {
         chassis_motor[2]->MotorEnable();
         chassis_motor[3]->MotorEnable();
         osDelay(100);
+        // Drop the arm-up window: everything that arrived while the motors were being
+        // enabled is cleared here, and the displacement taken at the top of this
+        // iteration came from the still disabled period, so it is dropped too.
+        dbus->DiscardMouseDelta();
+        mouse_delta = {};
         enabled = true;
       }
     }
@@ -463,11 +477,12 @@ void RM_RTOS_Default_Task(const void* args) {
     bool vision_locked = (now_ms - vision_last_obs_ms <= 120);
     float gimbal_vel = 0.0f;
 
-    // Mouse deltas are integrated as angle increments; the soft limits below still apply.
-    const float mouse_yaw_step =
-        clip<float>(-dbus->mouse.x * MOUSE_YAW_GAIN, -MOUSE_STEP_LIMIT, MOUSE_STEP_LIMIT);
-    const float mouse_pitch_step =
-        clip<float>(-dbus->mouse.y * MOUSE_PITCH_GAIN, -MOUSE_STEP_LIMIT, MOUSE_STEP_LIMIT);
+    // Mouse steps are counted as angle increments (no dt). They are only applied
+    // while the outputs are enabled and while autoaim does not own a locked gimbal;
+    // the displacement has already been consumed above either way.
+    const bool mouse_active = autoaim_requested ? !vision_locked : true;
+    const omni::MouseGimbalStep mouse_step =
+        omni::ComputeMouseGimbalStep(mouse_delta.x, mouse_delta.y, enabled, mouse_active);
 
     constexpr float AUTOAIM_YAW_SMOOTH = 0.16f;
     constexpr float AUTOAIM_PITCH_SMOOTH = 0.15f;
@@ -492,9 +507,9 @@ void RM_RTOS_Default_Task(const void* args) {
         gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
         gimbal_vel = 0.0f;
       } else {
-        yaw_target += yaw_omega * dt + mouse_yaw_step;
+        yaw_target += yaw_omega * dt + mouse_step.yaw;
         gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
-        gimbal_pos += gimbal_vel * dt + mouse_pitch_step;
+        gimbal_pos += gimbal_vel * dt + mouse_step.pitch;
         gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);  // existing soft limit
       }
     } else {
@@ -503,9 +518,9 @@ void RM_RTOS_Default_Task(const void* args) {
       }
       vision_obs_fresh = false;
 
-      yaw_target += yaw_omega * dt + mouse_yaw_step;
+      yaw_target += yaw_omega * dt + mouse_step.yaw;
       gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
-      gimbal_pos += gimbal_vel * dt + mouse_pitch_step;
+      gimbal_pos += gimbal_vel * dt + mouse_step.pitch;
       gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);  // existing soft limit
     }
 

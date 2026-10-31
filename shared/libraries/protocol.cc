@@ -198,7 +198,10 @@ bool Referee::ProcessDataRx(int cmd_id, const uint8_t* data, int length) {
       if (length <= (int)sizeof(game_robot_status)) memcpy(&game_robot_status, data, length);
       break;
     case POWER_HEAT_DATA:
-      if (length <= (int)sizeof(power_heat_data)) memcpy(&power_heat_data, data, length);
+      // The connected referee also sends a 16-byte variant; retain its common
+      // 14-byte prefix and leave the trailing extension uninterpreted.
+      if (length == 14 || length == 16)
+        memcpy(&power_heat_data, data, sizeof(power_heat_data));
       break;
     case GAME_ROBOT_POS:
       if (length <= (int)sizeof(game_robot_pos)) memcpy(&game_robot_pos, data, length);

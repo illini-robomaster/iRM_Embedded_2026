@@ -173,6 +173,10 @@ static RefereeUART* referee_uart = nullptr;
 static uint8_t prev_pmm_gimbal = 0xFF;
 static uint8_t prev_pmm_chassis = 0xFF;
 static uint8_t prev_pmm_shooter = 0xFF;
+// Legacy 0x0202 provides measured chassis power in watts.
+static volatile float measured_chassis_power_w = 0.0f;
+static volatile uint32_t chassis_power_rx_ms = 0;
+static volatile bool chassis_power_received = false;
 
 static void OnRefereeRx(int cmd_id, const uint8_t* data, int length) {
   switch (cmd_id) {
@@ -216,9 +220,13 @@ static void OnRefereeRx(int cmd_id, const uint8_t* data, int length) {
       break;
     }
     case communication::POWER_HEAT_DATA: {
+      if (length != 14 && length != 16) break;
       const auto* s = reinterpret_cast<const communication::power_heat_data_t*>(data);
-      print("[REF RX 0x0202] POWER_HEAT Heat17=%u Heat42=%u BufEnergy=%uJ\r\n",
-            s->shooter_17mm_barrel_heat, s->shooter_42mm_barrel_heat, s->buffer_energy);
+      if (std::isfinite(s->chassis_power) && s->chassis_power >= 0.0f) {
+        measured_chassis_power_w = s->chassis_power;
+        chassis_power_rx_ms = HAL_GetTick();
+        chassis_power_received = true;
+      }
       break;
     }
     case communication::GAME_ROBOT_POS: {
@@ -526,8 +534,16 @@ void RM_RTOS_Default_Task(const void* args) {
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
+  // Enable the 0x10/0x11 motor last to test power-restoration timing.
+  const int chassis_enable_order[] = {1, 2, 3, 0};
   osDelay(1000);
-  for (int i = 0; i < 4; i++) {
+  for (int i : chassis_enable_order) {
+    chassis_motor[i]->MotorEnable();
+    osDelay(20);
+  }
+  // Startup experiment: repeat enable after all four motors have had time to boot.
+  osDelay(500);
+  for (int i : chassis_enable_order) {
     chassis_motor[i]->MotorEnable();
     osDelay(20);
   }
@@ -608,10 +624,9 @@ void RM_RTOS_Default_Task(const void* args) {
     } else {
       if (!enabled) {
         print("Enabled \r\n");
-        chassis_motor[0]->MotorEnable();
-        chassis_motor[1]->MotorEnable();
-        chassis_motor[2]->MotorEnable();
-        chassis_motor[3]->MotorEnable();
+        for (int i : chassis_enable_order) {
+          chassis_motor[i]->MotorEnable();
+        }
         gimbal_motor->MotorEnable();
         float cur_pitch = gimbal_motor->GetTheta();
         gimbal_pos = clip<float>(cur_pitch < GIMBAL_PITCH_MAX ? cur_pitch : GIMBAL_PITCH_MAX,
@@ -655,8 +670,8 @@ void RM_RTOS_Default_Task(const void* args) {
         last_chassis_pmm_power = true;
         print(">>> [PMM] Chassis power RESTORED - re-enabling DM3519 motors <<<\r\n");
         if (enabled) {
-          osDelay(150);  // Allow DM3519 internal MCUs to boot
-          for (int i = 0; i < 4; i++) {
+          osDelay(1000);  // Recovery timing test: allow DM3519 internal MCUs to boot
+          for (int i : chassis_enable_order) {
             chassis_motor[i]->MotorEnable();
           }
           print(">>> [PMM] Chassis motors re-enabled! <<<\r\n");
@@ -853,22 +868,19 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[2] = -alpha + chassis_yaw_omega_target;
     vel[3] = alpha + chassis_yaw_omega_target;
 
-    // Referee System Regulation: Chassis Power & 60J Buffer Energy Protection (RMUL Rule 3.3.1.4)
-    // If buffer energy falls to 0, referee powers off chassis for 5 seconds.
-    // Throttles velocity output proportionally as buffer energy drops below 30 J.
+    // Stop chassis commands when referee PMM chassis power is off.
     if (!chassis_pmm_power) {
       vel[0] = 0.0f;
       vel[1] = 0.0f;
       vel[2] = 0.0f;
       vel[3] = 0.0f;
-    } else if (referee && referee->connection_flag_) {
-      float buffer_energy = (float)referee->power_heat_data.buffer_energy;
-      if (buffer_energy < 30.0f) {
-        float pwr_scale = clip<float>(buffer_energy / 30.0f, 0.25f, 1.0f);
-        vel[0] *= pwr_scale;
-        vel[1] *= pwr_scale;
-        vel[2] *= pwr_scale;
-        vel[3] *= pwr_scale;
+    } else if (chassis_power_received && HAL_GetTick() - chassis_power_rx_ms <= 500) {
+      // Velocity-mode feedback limiting; not a hard instantaneous electrical power cap.
+      constexpr float CHASSIS_POWER_LIMIT_W = 120.0f;
+      const float power_w = measured_chassis_power_w;
+      if (power_w > CHASSIS_POWER_LIMIT_W) {
+        const float scale = CHASSIS_POWER_LIMIT_W / power_w;
+        for (float& wheel_velocity : vel) wheel_velocity *= scale;
       }
     }
 
@@ -877,13 +889,13 @@ void RM_RTOS_Default_Task(const void* args) {
     // Right flywheel (0x208): +900 rad/s
     // swl == DOWN enables flywheels (provided shooter PMM power is active);
     // swl != DOWN or shooter PMM power cut disables them and applies smooth viscous braking
-    const float FLYWHEEL_TARGET_SPEED = 900.0f;
+    const float FLYWHEEL_TARGET_SPEED = 750.0f;
     if (dbus->swl == remote::DOWN && shooter_pmm_power) {
       if (!flywheel_enabled) {
         flywheel_enabled = true;
         left_flywheel_pid_.Reset();
         right_flywheel_pid_.Reset();
-        print("FLYWHEEL: ON (-900/+900 rad/s)\r\n");
+        print("FLYWHEEL: ON (-750/+750 rad/s)\r\n");
       }
     } else {
       if (flywheel_enabled) {
@@ -962,7 +974,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
     float feeder_target_velocity = 0.0f;
     if (feeder_requested) {
-      feeder_target_velocity = 130.0f;
+      feeder_target_velocity = 110.0f;
     } else {
       feeder_jam_detect_count = 0;
       feeder_jam_pause_count = 0;

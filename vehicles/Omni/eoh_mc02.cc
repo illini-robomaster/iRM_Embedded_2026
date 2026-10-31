@@ -427,8 +427,17 @@ void RM_RTOS_Default_Task(const void* args) {
   // Yaw PD gains from connected component version (smooth, robust, zero-windup)
   const float YAW_KP = 20000.0f;
   const float YAW_KD = 800.0f;        // per rad/s of measured yaw rate
-  const float YAW_MAX_LEAD = 0.6f;    // max rad the target may lead the measured yaw
+  const float YAW_KFF = 1200.0f;      // feedforward counts per rad/s of chassis spin rate
+  const float YAW_MAX_LEAD = 1.2f;    // max rad the target may lead the measured yaw (allows full torque up to 24000)
   const float YAW_RATE_ALPHA = 0.2f;  // low-pass on measured rate
+
+  // Pitch limits: looking towards the motor shaft from outside, clockwise rotation moves gimbal UP.
+  // In DM4310 coordinates, CW is negative angle, so upwards is MORE NEGATIVE.
+  // Rest position at startup is set to zero (0.0 rad).
+  // GIMBAL_PITCH_MAX is slightly below 0 (-0.05 rad / ~ -2.9 deg) to keep off the lower mechanical rest stop.
+  // GIMBAL_PITCH_MIN is the upward pitch limit (-0.75 rad / ~ -43 deg).
+  const float GIMBAL_PITCH_MIN = -0.75f;
+  const float GIMBAL_PITCH_MAX = -0.05f;
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
@@ -441,6 +450,8 @@ void RM_RTOS_Default_Task(const void* args) {
   chassis_motor[2]->MotorEnable();
   chassis_motor[3]->SetZeroPos();
   chassis_motor[3]->MotorEnable();
+  gimbal_motor->SetZeroPos();
+  osDelay(50);
   gimbal_motor->MotorEnable();
   osDelay(100);
 
@@ -453,7 +464,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
   uint32_t last_ms = HAL_GetTick();
   int print_count = 0;
-  float gimbal_pos = clip<float>(gimbal_motor->GetTheta(), -PI/4, PI/4);
+  float gimbal_pos = clip<float>(gimbal_motor->GetTheta(), GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
   float desired_yaw = 0.0f;
   float desired_pitch = 0.0f;
   bool autoaim_active = false;
@@ -516,7 +527,7 @@ void RM_RTOS_Default_Task(const void* args) {
         chassis_motor[2]->MotorEnable();
         chassis_motor[3]->MotorEnable();
         gimbal_motor->MotorEnable();
-        gimbal_pos = clip<float>(gimbal_motor->GetTheta(), -PI/4, PI/4);
+        gimbal_pos = clip<float>(gimbal_motor->GetTheta(), GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
         yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
         prev_yaw_measured = yaw_target;
         yaw_rate_filtered = 0.0f;
@@ -542,7 +553,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // Keyboard linear translation (WASD) with optional Shift boost:
     // W/S: forward/backward, A/D: strafe left/right (in field/gimbal reference frame)
-    float kb_speed = dbus->keyboard.bit.SHIFT ? 25.0f : 15.0f;
+    float kb_speed = dbus->keyboard.bit.SHIFT ? 25.0f : 10.0f;
     float kb_y = 0.0f;
     float kb_x = 0.0f;
     if (dbus->keyboard.bit.W) kb_y += kb_speed;
@@ -588,7 +599,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
       if (vision_obs_fresh && vision_locked) {
         desired_yaw = gimbal_yaw_measured_in_field_reference + latest_vision_obs.delta_yaw;
-        desired_pitch = clip<float>(gimbal_pos - latest_vision_obs.delta_pitch, -PI/4, PI/4);
+        desired_pitch = clip<float>(gimbal_pos - latest_vision_obs.delta_pitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
         vision_obs_fresh = false;
       }
 
@@ -596,13 +607,13 @@ void RM_RTOS_Default_Task(const void* args) {
         float yaw_err = atan2f(sinf(desired_yaw - yaw_target), cosf(desired_yaw - yaw_target));
         yaw_target += AUTOAIM_YAW_SMOOTH * yaw_err;
         gimbal_pos += AUTOAIM_PITCH_SMOOTH * (desired_pitch - gimbal_pos);
-        gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);
+        gimbal_pos = clip<float>(gimbal_pos, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
         gimbal_vel = 0.0f;
       } else {
         yaw_target += yaw_omega * dt + mouse_step.yaw;
-        gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
+        gimbal_vel = clip<float>(-dbus->ch3 / 660.0f * 30.0f, -30.0f, 30.0f);
         gimbal_pos += gimbal_vel * dt + mouse_step.pitch;
-        gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);  // existing soft limit
+        gimbal_pos = clip<float>(gimbal_pos, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
       }
     } else {
       if (autoaim_active) {
@@ -611,9 +622,9 @@ void RM_RTOS_Default_Task(const void* args) {
       vision_obs_fresh = false;
 
       yaw_target += yaw_omega * dt + mouse_step.yaw;
-      gimbal_vel = clip<float>(dbus->ch3 / 660.0 * 30.0, -30, 30);
+      gimbal_vel = clip<float>(-dbus->ch3 / 660.0f * 30.0f, -30.0f, 30.0f);
       gimbal_pos += gimbal_vel * dt + mouse_step.pitch;
-      gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);  // existing soft limit
+      gimbal_pos = clip<float>(gimbal_pos, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
     }
 
     // Apply constant velocity in opposite direction of chassis spin at the same speed as chassis rotation
@@ -632,14 +643,18 @@ void RM_RTOS_Default_Task(const void* args) {
       yaw_target = gimbal_yaw_measured_in_field_reference + delta_yaw;
     }
 
-    // PD with derivative on the (filtered) measurement: no kick when yaw_target moves
+    // PD with derivative on the (filtered) measurement relative to commanded spin rate:
+    // Prevents the D-term from resisting steady-state chassis rotation while damping oscillations.
     float meas_diff = atan2f(sinf(gimbal_yaw_measured_in_field_reference - prev_yaw_measured),
                              cosf(gimbal_yaw_measured_in_field_reference - prev_yaw_measured));
     prev_yaw_measured = gimbal_yaw_measured_in_field_reference;
     yaw_rate_filtered += YAW_RATE_ALPHA * (meas_diff / dt - yaw_rate_filtered);
-    yaw_feedback = YAW_KP * delta_yaw - YAW_KD * yaw_rate_filtered;
+    float rate_error = yaw_rate_filtered - chassis_spin_rate;
+    yaw_feedback = YAW_KP * delta_yaw - YAW_KD * rate_error;
 
-    float yaw_output_f = clip<float>(yaw_feedback, -25000.0f, 25000.0f);
+    // Velocity feedforward overcomes GM6020 back-EMF and bearing drag during high-speed chassis spin
+    float yaw_ff = YAW_KFF * chassis_spin_rate;
+    float yaw_output_f = clip<float>(yaw_ff + yaw_feedback, -28000.0f, 28000.0f);
     int16_t yaw_output = (int16_t)clip<float>(yaw_output_f, -30000.0f, 30000.0f);
 
     float chasis_yaw_measured_in_field_reference = gimbal_yaw_measured_in_field_reference - INS_angle[0];  // in rad
@@ -872,8 +887,8 @@ void RM_RTOS_Default_Task(const void* args) {
       float field_deg = RAD2DEG(gimbal_yaw_measured_in_field_reference);
       float target_deg = RAD2DEG(yaw_target);
       float muzzle_deg = RAD2DEG(yaw_motor->GetTheta() - YAW_MOTOR_OFFSET);
-      print("[CONN] IMU: %5.1f | Field: %5.1f | Target: %5.1f | MuzzleRel: %5.1f deg | spin: %.1f | out: %d | err: %5.1f\r\n",
-            imu_deg, field_deg, target_deg, muzzle_deg, chassis_yaw_omega_target, yaw_output, RAD2DEG(delta_yaw));
+      print("[CONN] IMU: %5.1f | Field: %5.1f | Target: %5.1f | MuzzleRel: %5.1f deg | Pitch: %5.2f rad (%4.1f deg) | out: %d | err: %5.1f\r\n",
+            imu_deg, field_deg, target_deg, muzzle_deg, gimbal_pos, RAD2DEG(gimbal_pos), yaw_output, RAD2DEG(delta_yaw));
       if (referee && referee->connection_flag_) {
         print("[REF] HP:%u/%u Heat:%u/%u Buf:%uJ PwrLim:%uW | ShotSpd:%.1fm/s\r\n",
               referee->game_robot_status.current_HP,

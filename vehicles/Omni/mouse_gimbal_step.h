@@ -42,7 +42,7 @@
 namespace omni {
 
 constexpr float kMouseYawGain = 0.0005f;   /* rad per count, left/right */
-constexpr float kMousePitchGain = 0.0005f; /* rad per count, up/down */
+constexpr float kMousePitchGain = 0.0015f; /* rad per count, up/down (increased for responsive pitch) */
 constexpr float kMouseStepLimit = 0.15f;   /* rad, per-loop anti-jump clamp */
 
 /** @brief Gimbal angle increments for one control iteration. */

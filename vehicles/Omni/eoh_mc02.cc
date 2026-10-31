@@ -154,7 +154,12 @@ control::Motor3508* feeder_motor;
 
 remote::DBUS* dbus = nullptr;
 
-const float YAW_MOTOR_OFFSET = 4.54f;  // in rad
+const float YAW_MOTOR_OFFSET = 0.762f;  // in rad (calibrated 12 o'clock alignment: 2.857 - 2.094)
+
+// Kinematic conversion ratio from wheel velocity command (rad/s) to physical chassis rotation rate (rad/s)
+// For 152mm omni wheels (r ≈ 0.076m) and chassis radius R ≈ 0.22m:
+// omega_chassis = (sqrt(2) * r / R) * omega_wheel ≈ 0.46
+const float CHASSIS_SPIN_RATIO = 0.46f;
 
 namespace board_state_can = communication::board_state_can;
 
@@ -309,7 +314,7 @@ static void VisionCanMainTaskStep(uint32_t now_ms, bool autoaim_requested) {
 }
 
 void RM_RTOS_Init() {
-  print_use_uart(&huart7);
+  print_use_uart(&huart10);
 
   // MC02 uses FDCAN instead of CAN
   can = new bsp::CAN(&hfdcan1, 0);
@@ -358,19 +363,15 @@ void RM_RTOS_Default_Task(const void* args) {
   control::MotorCANBase* dji_container[] = {yaw_motor, flywheel_motor[0], flywheel_motor[1], feeder_motor};
   // Standard RoboMaster feeder PID (from main_mc02.cc)
   control::PIDController feeder_pid_(40.0f, 5.0f, 10.0f);
-  // Anti-windup, zero-derivative flywheel velocity controllers.
-  // Kd = 0 eliminates high-frequency encoder noise amplification that vibrates the chassis and causes yaw jitter.
   control::ConstrainedPID left_flywheel_pid_(30.0f, 0.8f, 0.0f, 3000.0f, 16384.0f);
   control::ConstrainedPID right_flywheel_pid_(30.0f, 0.8f, 0.0f, 3000.0f, 16384.0f);
   bool flywheel_enabled = false;
 
-  // Yaw PD gains (output units are motor command counts)
+  // Yaw PD gains from connected component version (smooth, robust, zero-windup)
   const float YAW_KP = 20000.0f;
   const float YAW_KD = 800.0f;        // per rad/s of measured yaw rate
   const float YAW_MAX_LEAD = 0.6f;    // max rad the target may lead the measured yaw
   const float YAW_RATE_ALPHA = 0.2f;  // low-pass on measured rate
-  // Use standard CMSIS PIDController with gentle gains for bare motor
-  // Clean anti-windup PI state for bare feeder motor
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
@@ -384,20 +385,18 @@ void RM_RTOS_Default_Task(const void* args) {
   chassis_motor[3]->SetZeroPos();
   chassis_motor[3]->MotorEnable();
   gimbal_motor->MotorEnable();
-  gimbal_motor->SetZeroPos();
   osDelay(100);
 
   bool enabled = false;
   float yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
-  float yaw_feedback;
-  float prev_yaw_measured = 0.0f;
+  float yaw_feedback = 0.0f;
+  float prev_yaw_measured = yaw_target;
   float yaw_rate_filtered = 0.0f;
-  float gimbal_yaw_measured_in_field_reference = 0.0f;
-  prev_yaw_measured = yaw_target;
+  float gimbal_yaw_measured_in_field_reference = yaw_target;
 
   uint32_t last_ms = HAL_GetTick();
   int print_count = 0;
-  float gimbal_pos = 0;
+  float gimbal_pos = clip<float>(gimbal_motor->GetTheta(), -PI/4, PI/4);
   float desired_yaw = 0.0f;
   float desired_pitch = 0.0f;
   bool autoaim_active = false;
@@ -430,17 +429,6 @@ void RM_RTOS_Default_Task(const void* args) {
     last_ms = now_ms;
 
     
-    UNUSED(print_count);
-    // Throttled debug print (a blocking print every loop jitters the control loop)
-#if EOH_DEBUG_PRINT
-    if (++print_count >= 40) {
-      print_count = 0;
-      set_cursor(0, 0);
-      clear_screen();
-      print("CH0: %-4d CH1: %-4d CH2: %-4d CH3: %-4d \r\n", dbus->ch0, dbus->ch1, dbus->ch2, dbus->ch3);
-    }
-#endif
-
     // disable logic: swl == UP shuts down all chassis, gimbal, feeder, and flywheel motors
     if (dbus->swl == remote::UP) {
       if (enabled) {
@@ -448,6 +436,7 @@ void RM_RTOS_Default_Task(const void* args) {
         chassis_motor[1]->MotorDisable();
         chassis_motor[2]->MotorDisable();
         chassis_motor[3]->MotorDisable();
+        gimbal_motor->MotorDisable();
         print("Disabled \r\n");
         enabled = false;
         // Nothing of what happened during the shutdown belongs to the next move.
@@ -469,6 +458,11 @@ void RM_RTOS_Default_Task(const void* args) {
         chassis_motor[1]->MotorEnable();
         chassis_motor[2]->MotorEnable();
         chassis_motor[3]->MotorEnable();
+        gimbal_motor->MotorEnable();
+        gimbal_pos = clip<float>(gimbal_motor->GetTheta(), -PI/4, PI/4);
+        yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
+        prev_yaw_measured = yaw_target;
+        yaw_rate_filtered = 0.0f;
         osDelay(100);
         // Drop the arm-up window: everything that arrived while the motors were being
         // enabled is cleared here, and the displacement taken at the top of this
@@ -479,12 +473,41 @@ void RM_RTOS_Default_Task(const void* args) {
       }
     }
 
-    // chassis
+    // Auto-spin logic on swr == DOWN
+    // Higher spin speed of 9.0 rad/s
+    // (Remote wheel dial is broken / ignored).
+    const float AUTO_SPIN_SPEED = 9.0f;
+    float auto_yaw_omega = (dbus->swr == remote::DOWN) ? AUTO_SPIN_SPEED : 0.0f;
+    float chassis_yaw_omega_target = auto_yaw_omega;
+
+    // Field-reference gimbal yaw (from connected component version)
     gimbal_yaw_measured_in_field_reference = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
 
-    float y = -clip<float>(dbus->ch0 / 660.0 * 30.0, -30, 30);                 // forward
-    float x = clip<float>(dbus->ch1 / 660.0 * 30.0, -30, 30);                  // left;
-    float yaw_omega = clip<float>(-(dbus->ch2 + 16) / 660.0 * 10.0, -10, 10);  // yaw (slower)
+    // Keyboard linear translation (WASD) with optional Shift boost:
+    // W/S: forward/backward, A/D: strafe left/right (in field/gimbal reference frame)
+    float kb_speed = dbus->keyboard.bit.SHIFT ? 25.0f : 15.0f;
+    float kb_y = 0.0f;
+    float kb_x = 0.0f;
+    if (dbus->keyboard.bit.W) kb_y += kb_speed;
+    if (dbus->keyboard.bit.S) kb_y -= kb_speed;
+    if (dbus->keyboard.bit.A) kb_x -= kb_speed;
+    if (dbus->keyboard.bit.D) kb_x += kb_speed;
+
+    // Right stick vertical (ch1) is forward/back (y); right stick horizontal (ch0) is strafe (x).
+    // Unified with keyboard WASD so both inputs move along the exact same axes.
+    float stick_y = clip<float>(dbus->ch1 / 660.0f * 30.0f, -30.0f, 30.0f);
+    float stick_x = clip<float>(dbus->ch0 / 660.0f * 30.0f, -30.0f, 30.0f);
+    float y = stick_y + kb_y;
+    float x = stick_x + kb_x;
+    y = clip<float>(y, -30.0f, 30.0f);
+    x = clip<float>(x, -30.0f, 30.0f);
+
+    // Deadband on ch2 to prevent transmitter stick center drift from nudging yaw CCW
+    int16_t ch2_raw = dbus->ch2;
+    if (abs(ch2_raw) < 25) {
+      ch2_raw = 0;
+    }
+    float yaw_omega = clip<float>(-ch2_raw / 660.0f * 10.0f, -10.0f, 10.0f);  // yaw (slower)
 
     bool vision_locked = (now_ms - vision_last_obs_ms <= 120);
     float gimbal_vel = 0.0f;
@@ -536,6 +559,10 @@ void RM_RTOS_Default_Task(const void* args) {
       gimbal_pos = clip<float>(gimbal_pos, -PI/4, PI/4);  // existing soft limit
     }
 
+    // Apply constant velocity in opposite direction of chassis spin at the same speed as chassis rotation
+    float chassis_spin_rate = CHASSIS_SPIN_RATIO * chassis_yaw_omega_target;
+    yaw_target += chassis_spin_rate * dt;
+
     float delta_yaw = yaw_target - gimbal_yaw_measured_in_field_reference;
     float cos = cosf(delta_yaw);
     float sin = sinf(delta_yaw);
@@ -555,22 +582,23 @@ void RM_RTOS_Default_Task(const void* args) {
     yaw_rate_filtered += YAW_RATE_ALPHA * (meas_diff / dt - yaw_rate_filtered);
     yaw_feedback = YAW_KP * delta_yaw - YAW_KD * yaw_rate_filtered;
 
-    float chasis_yaw_measured_in_field_reference = gimbal_yaw_measured_in_field_reference - INS_angle[0];  // in rad
+    float yaw_output_f = clip<float>(yaw_feedback, -25000.0f, 25000.0f);
+    int16_t yaw_output = (int16_t)clip<float>(yaw_output_f, -30000.0f, 30000.0f);
 
-    // rotate the x,y according to the robot's heading
-    float temp_x = x * cosf(chasis_yaw_measured_in_field_reference) - y * sinf(chasis_yaw_measured_in_field_reference);
-    float temp_y = x * sinf(chasis_yaw_measured_in_field_reference) + y * cosf(chasis_yaw_measured_in_field_reference);
-    x = temp_x;
-    y = temp_y;
+    float chasis_yaw_measured_in_field_reference = gimbal_yaw_measured_in_field_reference - INS_angle[0];  // in rad
+    float cos_yaw = cosf(chasis_yaw_measured_in_field_reference);
+    float sin_yaw = sinf(chasis_yaw_measured_in_field_reference);
+    float chassis_x = x * cos_yaw - y * sin_yaw;
+    float chassis_y = x * sin_yaw + y * cos_yaw;
+    x = chassis_x;
+    y = chassis_y;
 
     // alpha, beta equals to x y rotated by -45 degrees
     float alpha = (x - y) / 1.4142f;
     float beta = (y + x) / 1.4142f;
 
-    // max output for omega while ensure translation
+    // Limit omega to available chassis motor headroom while translating
     float max_omega = abs(30.0f - max(fabsf(alpha), fabsf(beta)));
-    float auto_yaw_omega = 0.0f;
-    float chassis_yaw_omega_target = auto_yaw_omega;
     chassis_yaw_omega_target = clip<float>(chassis_yaw_omega_target, -max_omega, max_omega);
 
     vel[0] = -beta + chassis_yaw_omega_target;
@@ -581,9 +609,9 @@ void RM_RTOS_Default_Task(const void* args) {
     // Flywheel Control:
     // Left flywheel (0x207): -900 rad/s
     // Right flywheel (0x208): +900 rad/s
-    // swr == DOWN enables flywheels; swr != DOWN disables them and applies smooth viscous braking
+    // swl == DOWN enables flywheels; swl != DOWN disables them and applies smooth viscous braking
     const float FLYWHEEL_TARGET_SPEED = 900.0f;
-    if (dbus->swr == remote::DOWN) {
+    if (dbus->swl == remote::DOWN) {
       if (!flywheel_enabled) {
         flywheel_enabled = true;
         left_flywheel_pid_.Reset();
@@ -641,8 +669,13 @@ void RM_RTOS_Default_Task(const void* args) {
     // - Prevents +/-16384 full-current saturation and 900 rad/s wild oscillation.
     // - At omega=0, delivers 3100 counts breakaway kick immediately.
     // - In steady state, locks right onto 80 rad/s with ~1100 counts.
+    // Feeder triggered by Mouse Left Click or Keyboard F / E / R
+    bool feeder_requested = dbus->mouse.l ||
+                            dbus->keyboard.bit.F ||
+                            dbus->keyboard.bit.E ||
+                            dbus->keyboard.bit.R;
     float feeder_target_velocity = 0.0f;
-    if (dbus->swl == remote::DOWN) {
+    if (feeder_requested) {
       feeder_target_velocity = 160.0f;
     } else {
       feeder_jam_detect_count = 0;
@@ -716,20 +749,28 @@ void RM_RTOS_Default_Task(const void* args) {
     chassis_motor[1]->SetOutput(vel[1]);
     chassis_motor[2]->SetOutput(vel[2]);
     chassis_motor[3]->SetOutput(vel[3]);
-    gimbal_motor->SetOutput(gimbal_pos, gimbal_vel);
+    // DM4310 in POS_VEL mode: 2nd argument is velocity limit (rad/s) for profile position tracking.
+    // Must be positive non-zero so motor tracks gimbal_pos whether commanded by mouse, stick, or autoaim.
+    const float GIMBAL_PITCH_TRACKING_VEL = 20.0f;
+    gimbal_motor->SetOutput(gimbal_pos, GIMBAL_PITCH_TRACKING_VEL);
     flywheel_motor[0]->SetOutput(left_flywheel_output);
     flywheel_motor[1]->SetOutput(right_flywheel_output);
     feeder_motor->SetOutput(feeder_output);
-    float yaw_kF = 400.0f;
-    float yaw_output_f = clip<float>(yaw_feedback, -25000.0f, 25000.0f) + chassis_yaw_omega_target * yaw_kF;
-    int16_t yaw_output = (int16_t)clip<float>(yaw_output_f, -30000.0f, 30000.0f);
-
-    // print("yaw_output: %-7.2f", yaw_output);  // blocking UART print every loop stalls control
-    
     yaw_motor->SetOutput(yaw_output);
     control::MotorDM3519::TransmitOutput(chassis_motor, 4);
     control::Motor4310::TransmitOutput(gimbal_container, 1);
     control::MotorCANBase::TransmitOutput(dji_container, 4);
+
+    // Throttled debug print every 500ms for heading and gimbal alignment verification
+    if (++print_count >= 100) {
+      print_count = 0;
+      float imu_deg = RAD2DEG(INS_angle[0]);
+      float field_deg = RAD2DEG(gimbal_yaw_measured_in_field_reference);
+      float target_deg = RAD2DEG(yaw_target);
+      float muzzle_deg = RAD2DEG(yaw_motor->GetTheta() - YAW_MOTOR_OFFSET);
+      print("[CONN] IMU: %5.1f | Field: %5.1f | Target: %5.1f | MuzzleRel: %5.1f deg | spin: %.1f | out: %d | err: %5.1f\r\n",
+            imu_deg, field_deg, target_deg, muzzle_deg, chassis_yaw_omega_target, yaw_output, RAD2DEG(delta_yaw));
+    }
 
     osDelay(5);
   }

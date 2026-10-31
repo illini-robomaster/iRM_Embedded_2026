@@ -358,6 +358,11 @@ void RM_RTOS_Default_Task(const void* args) {
   control::MotorCANBase* dji_container[] = {yaw_motor, flywheel_motor[0], flywheel_motor[1], feeder_motor};
   // Standard RoboMaster feeder PID (from main_mc02.cc)
   control::PIDController feeder_pid_(40.0f, 5.0f, 10.0f);
+  // Anti-windup, zero-derivative flywheel velocity controllers.
+  // Kd = 0 eliminates high-frequency encoder noise amplification that vibrates the chassis and causes yaw jitter.
+  control::ConstrainedPID left_flywheel_pid_(30.0f, 0.8f, 0.0f, 3000.0f, 16384.0f);
+  control::ConstrainedPID right_flywheel_pid_(30.0f, 0.8f, 0.0f, 3000.0f, 16384.0f);
+  bool flywheel_enabled = false;
 
   // Yaw PD gains (output units are motor command counts)
   const float YAW_KP = 20000.0f;
@@ -436,8 +441,8 @@ void RM_RTOS_Default_Task(const void* args) {
     }
 #endif
 
-    // disable logic
-    if (dbus->swr == remote::DOWN) {
+    // disable logic: swl == UP shuts down all chassis, gimbal, feeder, and flywheel motors
+    if (dbus->swl == remote::UP) {
       if (enabled) {
         chassis_motor[0]->MotorDisable();
         chassis_motor[1]->MotorDisable();
@@ -448,6 +453,13 @@ void RM_RTOS_Default_Task(const void* args) {
         // Nothing of what happened during the shutdown belongs to the next move.
         dbus->DiscardMouseDelta();
       }
+      flywheel_enabled = false;
+      left_flywheel_pid_.Reset();
+      right_flywheel_pid_.Reset();
+      flywheel_motor[0]->SetOutput(0);
+      flywheel_motor[1]->SetOutput(0);
+      feeder_motor->SetOutput(0);
+      control::MotorCANBase::TransmitOutput(dji_container, 4);
       osDelay(100);
       continue;
     } else {
@@ -557,7 +569,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // max output for omega while ensure translation
     float max_omega = abs(30.0f - max(fabsf(alpha), fabsf(beta)));
-    float auto_yaw_omega = 0.0f; //dbus->swl == remote::UP ? 15.0f : 0.0f;
+    float auto_yaw_omega = 0.0f;
     float chassis_yaw_omega_target = auto_yaw_omega;
     chassis_yaw_omega_target = clip<float>(chassis_yaw_omega_target, -max_omega, max_omega);
 
@@ -565,6 +577,63 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[1] = beta + chassis_yaw_omega_target;
     vel[2] = -alpha + chassis_yaw_omega_target;
     vel[3] = alpha + chassis_yaw_omega_target;
+
+    // Flywheel Control:
+    // Left flywheel (0x207): -900 rad/s
+    // Right flywheel (0x208): +900 rad/s
+    // swr == DOWN enables flywheels; swr != DOWN disables them and applies smooth viscous braking
+    const float FLYWHEEL_TARGET_SPEED = 900.0f;
+    if (dbus->swr == remote::DOWN) {
+      if (!flywheel_enabled) {
+        flywheel_enabled = true;
+        left_flywheel_pid_.Reset();
+        right_flywheel_pid_.Reset();
+        print("FLYWHEEL: ON (-900/+900 rad/s)\r\n");
+      }
+    } else {
+      if (flywheel_enabled) {
+        flywheel_enabled = false;
+        left_flywheel_pid_.Reset();
+        right_flywheel_pid_.Reset();
+        print("FLYWHEEL: BRAKING TO REST\r\n");
+      }
+    }
+
+    int16_t left_flywheel_output = 0;
+    int16_t right_flywheel_output = 0;
+    float left_omega = flywheel_motor[0]->GetOmega();
+    float right_omega = flywheel_motor[1]->GetOmega();
+
+    if (flywheel_enabled) {
+      // Steady running at -900 and +900 rad/s with anti-windup PI (Kd=0 prevents torque ripple & yaw gyro jitter)
+      float left_diff = -FLYWHEEL_TARGET_SPEED - left_omega;
+      float right_diff = FLYWHEEL_TARGET_SPEED - right_omega;
+      left_flywheel_output = left_flywheel_pid_.ComputeConstrainedOutput(left_diff);
+      right_flywheel_output = right_flywheel_pid_.ComputeConstrainedOutput(right_diff);
+    } else {
+      // Active viscous dynamic braking:
+      // Applies braking current strictly opposing the current spin direction (-k_brake * omega).
+      // Decelerates both flywheels smoothly, synchronously, and quickly in ~0.6s without overshoot,
+      // windup, or reversing past zero.
+      const float k_brake = 3.0f;          // counts per rad/s (~2700 counts / 3.3 A at 900 rad/s)
+      const float stop_threshold = 25.0f;  // rad/s (~240 RPM), below which outputs cut off cleanly to 0
+
+      if (left_omega < -stop_threshold) {
+        // Left is spinning negative -> positive braking current
+        float brake = clip<float>(-k_brake * left_omega, 0.0f, 3500.0f);
+        left_flywheel_output = (int16_t)brake;
+      } else {
+        left_flywheel_output = 0;
+      }
+
+      if (right_omega > stop_threshold) {
+        // Right is spinning positive -> negative braking current
+        float brake = clip<float>(-k_brake * right_omega, -3500.0f, 0.0f);
+        right_flywheel_output = (int16_t)brake;
+      } else {
+        right_flywheel_output = 0;
+      }
+    }
 
     // Robust 80 rad/s (~760 RPM) Feedforward + Proportional Control:
     // Uses 1100 counts base feedforward + 25 * error.
@@ -648,8 +717,8 @@ void RM_RTOS_Default_Task(const void* args) {
     chassis_motor[2]->SetOutput(vel[2]);
     chassis_motor[3]->SetOutput(vel[3]);
     gimbal_motor->SetOutput(gimbal_pos, gimbal_vel);
-    flywheel_motor[0]->SetOutput(0);
-    flywheel_motor[1]->SetOutput(0);
+    flywheel_motor[0]->SetOutput(left_flywheel_output);
+    flywheel_motor[1]->SetOutput(right_flywheel_output);
     feeder_motor->SetOutput(feeder_output);
     float yaw_kF = 400.0f;
     float yaw_output_f = clip<float>(yaw_feedback, -25000.0f, 25000.0f) + chassis_yaw_omega_target * yaw_kF;

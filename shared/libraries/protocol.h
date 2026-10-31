@@ -224,7 +224,7 @@ typedef struct {
 } __packed dart_remaining_time_t;
 using dart_info_t = dart_remaining_time_t;
 
-/* ===== GAME_ROBOT_STATUS 0x0201 (17 B, 10 Hz) ===== */
+/* ===== GAME_ROBOT_STATUS 0x0201 (13 B standard / 17 B ext, 10 Hz) ===== */
 typedef struct {
   uint8_t robot_id;
   uint8_t robot_level;
@@ -239,7 +239,6 @@ typedef struct {
   uint16_t shooter_barrel_cooling_value;
   uint16_t shooter_barrel_heat_limit;
   uint16_t chassis_power_limit;
-  float bullet_speed_limit;
   union {
     struct {
       uint8_t power_management_gimbal_output : 1;
@@ -252,6 +251,7 @@ typedef struct {
       uint8_t mains_power_shooter_output : 1;
     };
   };
+  float bullet_speed_limit;
 } __packed game_robot_status_t;
 using robot_status_t = game_robot_status_t;
 
@@ -740,12 +740,16 @@ class Referee : public Protocol {
   radar_enemy_buffs_t radar_enemy_buffs{};
   radar_enemy_key_t radar_enemy_key{};
 
+  typedef void (*RxCallback)(int cmd_id, const uint8_t* data, int length);
+  void SetRxCallback(RxCallback cb) { rx_callback_ = cb; }
+
   void PrepareUIContent(content graph_content);
 
  private:
   bool ProcessDataRx(int cmd_id, const uint8_t* data, int length) final;
   int ProcessDataTx(int cmd_id, uint8_t* data) final;
 
+  RxCallback rx_callback_ = nullptr;
   content graph_content_ = NO_GRAPH;
 };
 

@@ -170,6 +170,87 @@ class RefereeUART : public bsp::UART {
 static communication::Referee* referee = nullptr;
 static RefereeUART* referee_uart = nullptr;
 
+static uint8_t prev_pmm_gimbal = 0xFF;
+static uint8_t prev_pmm_chassis = 0xFF;
+static uint8_t prev_pmm_shooter = 0xFF;
+
+static void OnRefereeRx(int cmd_id, const uint8_t* data, int length) {
+  switch (cmd_id) {
+    case communication::GAME_STATUS: {
+      const auto* s = reinterpret_cast<const communication::game_status_t*>(data);
+      print("[REF RX 0x0001] GAME_STATUS type=%u prog=%u remain=%us\r\n",
+            s->game_type, s->game_progress, s->stage_remain_time);
+      break;
+    }
+    case communication::GAME_RESULT: {
+      const auto* s = reinterpret_cast<const communication::game_result_t*>(data);
+      print("[REF RX 0x0002] GAME_RESULT winner=%u\r\n", s->winner);
+      break;
+    }
+    case communication::GAME_ROBOT_HP: {
+      const auto* s = reinterpret_cast<const communication::game_robot_HP_t*>(data);
+      print("[REF RX 0x0003] ROBOT_HP ally1=%u ally3=%u ally4=%u ally7=%u base=%u\r\n",
+            s->ally_1_robot_HP, s->ally_3_robot_HP, s->ally_4_robot_HP, s->ally_7_robot_HP, s->ally_base_HP);
+      break;
+    }
+    case communication::REFEREE_WARNING: {
+      const auto* s = reinterpret_cast<const communication::referee_warning_t*>(data);
+      print("[REF RX 0x0104] WARNING lvl=%u robot=%u cnt=%u\r\n",
+            s->level, s->offending_robot_id, s->count);
+      break;
+    }
+    case communication::GAME_ROBOT_STATUS: {
+      const auto* s = reinterpret_cast<const communication::game_robot_status_t*>(data);
+      if (s->power_management_gimbal_output != prev_pmm_gimbal ||
+          s->power_management_chassis_output != prev_pmm_chassis ||
+          s->power_management_shooter_output != prev_pmm_shooter) {
+        prev_pmm_gimbal = s->power_management_gimbal_output;
+        prev_pmm_chassis = s->power_management_chassis_output;
+        prev_pmm_shooter = s->power_management_shooter_output;
+        print(">>> [PMM STATE CHANGE] Gimbal:%u Chassis:%u Shooter:%u | HP:%u/%u (len=%d) <<<\r\n",
+              s->power_management_gimbal_output,
+              s->power_management_chassis_output,
+              s->power_management_shooter_output,
+              s->current_HP, s->maximum_HP, length);
+      }
+      break;
+    }
+    case communication::POWER_HEAT_DATA: {
+      const auto* s = reinterpret_cast<const communication::power_heat_data_t*>(data);
+      print("[REF RX 0x0202] POWER_HEAT Heat17=%u Heat42=%u BufEnergy=%uJ\r\n",
+            s->shooter_17mm_barrel_heat, s->shooter_42mm_barrel_heat, s->buffer_energy);
+      break;
+    }
+    case communication::GAME_ROBOT_POS: {
+      const auto* s = reinterpret_cast<const communication::game_robot_pos_t*>(data);
+      print("[REF RX 0x0203] POS x=%.2f y=%.2f angle=%.1f\r\n", s->x, s->y, s->angle);
+      break;
+    }
+    case communication::ROBOT_HURT: {
+      const auto* s = reinterpret_cast<const communication::robot_hurt_t*>(data);
+      print("[REF RX 0x0206] HURT armor=%u reason=%u seq=%u pos=(%d,%d)\r\n",
+            s->armor_id, s->HP_deduction_reason, s->hit_sequence, s->hit_position_x, s->hit_position_y);
+      break;
+    }
+    case communication::SHOOT_DATA: {
+      const auto* s = reinterpret_cast<const communication::shoot_data_t*>(data);
+      print("[REF RX 0x0207] SHOOT type=%u num=%u freq=%u spd=%.2fm/s\r\n",
+            s->bullet_type, s->shooter_number, s->launching_frequency, s->initial_speed);
+      break;
+    }
+    case communication::BULLET_REMAINING: {
+      const auto* s = reinterpret_cast<const communication::projectile_allowance_t*>(data);
+      print("[REF RX 0x0208] ALLOWANCE 17mm=%u 42mm=%u coin=%u fort=%u\r\n",
+            s->allowance_17mm, s->allowance_42mm, s->remaining_gold_coin, s->allowance_fortress);
+      break;
+    }
+    default: {
+      print("[REF RX 0x%04X] len=%d\r\n", cmd_id, length);
+      break;
+    }
+  }
+}
+
 void refereeTask(void* arg) {
   UNUSED(arg);
   uint8_t* rx_data = nullptr;
@@ -179,6 +260,9 @@ void refereeTask(void* arg) {
     if (flags & REFEREE_RX_SIGNAL) {
       int32_t length = referee_uart->Read(&rx_data);
       if (length > 0 && rx_data != nullptr && referee != nullptr) {
+        if (!referee->connection_flag_) {
+          print("[REF UART1] Raw rx %ld bytes\r\n", (long)length);
+        }
         referee->Receive(communication::package_t{rx_data, (int)length});
       }
     }
@@ -362,7 +446,7 @@ static void VisionCanMainTaskStep(uint32_t now_ms, bool autoaim_requested) {
 }
 
 void RM_RTOS_Init() {
-  print_use_uart(&huart10);
+  print_use_uart(&huart7);
 
   // MC02 uses FDCAN instead of CAN
   can = new bsp::CAN(&hfdcan1, 0);
@@ -407,6 +491,7 @@ void RM_RTOS_Init() {
   referee_uart->SetupRx(512);
   referee_uart->SetupTx(512);
   referee = new communication::Referee;
+  referee->SetRxCallback(OnRefereeRx);
 
   // IMU initialization is in imuTask() - HAL_Delay() in BMI088 constructor
   // hangs when called before the RTOS scheduler starts
@@ -431,9 +516,9 @@ void RM_RTOS_Default_Task(const void* args) {
   const float YAW_MAX_LEAD = 1.2f;    // max rad the target may lead the measured yaw (allows full torque up to 24000)
   const float YAW_RATE_ALPHA = 0.2f;  // low-pass on measured rate
 
-  // Pitch limits: looking towards the motor shaft from outside, clockwise rotation moves gimbal UP.
-  // In DM4310 coordinates, CW is negative angle, so upwards is MORE NEGATIVE.
-  // Rest position at startup is set to zero (0.0 rad).
+  // Pitch limits: looking towards the motor shaft from outside, clockwise rotation moves gimbal DOWN,
+  // counter-clockwise rotation moves gimbal UP. Upwards is MORE NEGATIVE.
+  // Rest position at startup is zeroed at the lower mechanical stop (0.0 rad).
   // GIMBAL_PITCH_MAX is slightly below 0 (-0.05 rad / ~ -2.9 deg) to keep off the lower mechanical rest stop.
   // GIMBAL_PITCH_MIN is the upward pitch limit (-0.75 rad / ~ -43 deg).
   const float GIMBAL_PITCH_MIN = -0.75f;
@@ -442,14 +527,10 @@ void RM_RTOS_Default_Task(const void* args) {
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
   osDelay(1000);
-  chassis_motor[0]->SetZeroPos();
-  chassis_motor[0]->MotorEnable();
-  chassis_motor[1]->SetZeroPos();
-  chassis_motor[1]->MotorEnable();
-  chassis_motor[2]->SetZeroPos();
-  chassis_motor[2]->MotorEnable();
-  chassis_motor[3]->SetZeroPos();
-  chassis_motor[3]->MotorEnable();
+  for (int i = 0; i < 4; i++) {
+    chassis_motor[i]->MotorEnable();
+    osDelay(20);
+  }
   gimbal_motor->SetZeroPos();
   osDelay(50);
   gimbal_motor->MotorEnable();
@@ -464,7 +545,8 @@ void RM_RTOS_Default_Task(const void* args) {
 
   uint32_t last_ms = HAL_GetTick();
   int print_count = 0;
-  float gimbal_pos = clip<float>(gimbal_motor->GetTheta(), GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+  // Artificially push slightly negative (-0.05 rad) to lift off the mechanical rest stop (0.0 rad)
+  float gimbal_pos = GIMBAL_PITCH_MAX;
   float desired_yaw = 0.0f;
   float desired_pitch = 0.0f;
   bool autoaim_active = false;
@@ -473,6 +555,10 @@ void RM_RTOS_Default_Task(const void* args) {
   int feeder_jam_pause_count = 0;
   int feeder_jam_retries = 0;
   bool feeder_jam_locked = false;
+
+  bool last_gimbal_pmm_power = true;
+  bool last_chassis_pmm_power = false;
+  bool last_shooter_pmm_power = true;
 
   while (true) {
     BoardStateCanMainTaskStep();
@@ -527,7 +613,9 @@ void RM_RTOS_Default_Task(const void* args) {
         chassis_motor[2]->MotorEnable();
         chassis_motor[3]->MotorEnable();
         gimbal_motor->MotorEnable();
-        gimbal_pos = clip<float>(gimbal_motor->GetTheta(), GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+        float cur_pitch = gimbal_motor->GetTheta();
+        gimbal_pos = clip<float>(cur_pitch < GIMBAL_PITCH_MAX ? cur_pitch : GIMBAL_PITCH_MAX,
+                                 GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
         yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
         prev_yaw_measured = yaw_target;
         yaw_rate_filtered = 0.0f;
@@ -538,6 +626,82 @@ void RM_RTOS_Default_Task(const void* args) {
         dbus->DiscardMouseDelta();
         mouse_delta = {};
         enabled = true;
+      }
+    }
+
+    // PMM Power Management:
+    // If referee is connected and has reported robot status, use PMM output states.
+    // Otherwise (standalone bench test), default to power ON.
+    bool gimbal_pmm_power = true;
+    bool chassis_pmm_power = true;
+    bool shooter_pmm_power = true;
+    if (referee && referee->connection_flag_ && prev_pmm_chassis != 0xFF) {
+      gimbal_pmm_power = (prev_pmm_gimbal != 0);
+      chassis_pmm_power = (prev_pmm_chassis != 0);
+      shooter_pmm_power = (prev_pmm_shooter != 0);
+    }
+
+    // PMM Chassis Power handling (Issue 3):
+    // When 24V chassis power cuts, DM3519 motors physically lose power and shut down.
+    // When power returns, DM3519 motors boot into DISABLED state by default and ignore
+    // velocity commands until MotorEnable() (0xFF..0xFC) is re-sent.
+    if (!chassis_pmm_power) {
+      if (last_chassis_pmm_power) {
+        last_chassis_pmm_power = false;
+        print(">>> [PMM] Chassis power CUT by referee - stopping chassis <<<\r\n");
+      }
+    } else {
+      if (!last_chassis_pmm_power) {
+        last_chassis_pmm_power = true;
+        print(">>> [PMM] Chassis power RESTORED - re-enabling DM3519 motors <<<\r\n");
+        if (enabled) {
+          osDelay(150);  // Allow DM3519 internal MCUs to boot
+          for (int i = 0; i < 4; i++) {
+            chassis_motor[i]->MotorEnable();
+          }
+          print(">>> [PMM] Chassis motors re-enabled! <<<\r\n");
+        }
+      }
+    }
+
+    // PMM Gimbal Power handling (Issue 1):
+    // Gimbal (DM4310) and Yaw (GM6020) motors are wired to MiniPC port on PMM,
+    // which remains permanently powered. When the referee cuts power to the Gimbal port,
+    // we must software disable both motors.
+    if (!gimbal_pmm_power) {
+      if (last_gimbal_pmm_power) {
+        last_gimbal_pmm_power = false;
+        print(">>> [PMM] Gimbal power CUT by referee - software disabling gimbal & yaw <<<\r\n");
+        gimbal_motor->MotorDisable();
+      }
+    } else {
+      if (!last_gimbal_pmm_power) {
+        last_gimbal_pmm_power = true;
+        print(">>> [PMM] Gimbal power RESTORED - re-enabling gimbal & yaw <<<\r\n");
+        if (enabled) {
+          gimbal_motor->MotorEnable();
+          float cur_pitch = gimbal_motor->GetTheta();
+          gimbal_pos = clip<float>(cur_pitch < GIMBAL_PITCH_MAX ? cur_pitch : GIMBAL_PITCH_MAX,
+                                   GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+          yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
+          prev_yaw_measured = yaw_target;
+          yaw_rate_filtered = 0.0f;
+        }
+      }
+    }
+
+    // PMM Shooter Power handling (Issue 2):
+    // Flywheels are wired through MiniPC port (permanently powered).
+    // Cutting Ammo Booster power only physically cuts feeder. We must software disable flywheels.
+    if (!shooter_pmm_power) {
+      if (last_shooter_pmm_power) {
+        last_shooter_pmm_power = false;
+        print(">>> [PMM] Shooter power CUT by referee - disabling flywheels & feeder <<<\r\n");
+      }
+    } else {
+      if (!last_shooter_pmm_power) {
+        last_shooter_pmm_power = true;
+        print(">>> [PMM] Shooter power RESTORED <<<\r\n");
       }
     }
 
@@ -599,7 +763,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
       if (vision_obs_fresh && vision_locked) {
         desired_yaw = gimbal_yaw_measured_in_field_reference + latest_vision_obs.delta_yaw;
-        desired_pitch = clip<float>(gimbal_pos - latest_vision_obs.delta_pitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+        desired_pitch = clip<float>(gimbal_pos + latest_vision_obs.delta_pitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
         vision_obs_fresh = false;
       }
 
@@ -657,6 +821,17 @@ void RM_RTOS_Default_Task(const void* args) {
     float yaw_output_f = clip<float>(yaw_ff + yaw_feedback, -28000.0f, 28000.0f);
     int16_t yaw_output = (int16_t)clip<float>(yaw_output_f, -30000.0f, 30000.0f);
 
+    // If gimbal power is cut on PMM, software disable yaw output and hold tracking
+    if (!gimbal_pmm_power) {
+      yaw_output = 0;
+      yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
+      prev_yaw_measured = yaw_target;
+      yaw_rate_filtered = 0.0f;
+      float cur_pitch = gimbal_motor->GetTheta();
+      gimbal_pos = clip<float>(cur_pitch < GIMBAL_PITCH_MAX ? cur_pitch : GIMBAL_PITCH_MAX,
+                               GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+    }
+
     float chasis_yaw_measured_in_field_reference = gimbal_yaw_measured_in_field_reference - INS_angle[0];  // in rad
     float cos_yaw = cosf(chasis_yaw_measured_in_field_reference);
     float sin_yaw = sinf(chasis_yaw_measured_in_field_reference);
@@ -681,30 +856,29 @@ void RM_RTOS_Default_Task(const void* args) {
     // Referee System Regulation: Chassis Power & 60J Buffer Energy Protection (RMUL Rule 3.3.1.4)
     // If buffer energy falls to 0, referee powers off chassis for 5 seconds.
     // Throttles velocity output proportionally as buffer energy drops below 30 J.
-    if (referee && referee->connection_flag_) {
-      if (!referee->game_robot_status.power_management_chassis_output) {
-        vel[0] = 0.0f;
-        vel[1] = 0.0f;
-        vel[2] = 0.0f;
-        vel[3] = 0.0f;
-      } else {
-        float buffer_energy = (float)referee->power_heat_data.buffer_energy;
-        if (buffer_energy < 30.0f) {
-          float pwr_scale = clip<float>(buffer_energy / 30.0f, 0.25f, 1.0f);
-          vel[0] *= pwr_scale;
-          vel[1] *= pwr_scale;
-          vel[2] *= pwr_scale;
-          vel[3] *= pwr_scale;
-        }
+    if (!chassis_pmm_power) {
+      vel[0] = 0.0f;
+      vel[1] = 0.0f;
+      vel[2] = 0.0f;
+      vel[3] = 0.0f;
+    } else if (referee && referee->connection_flag_) {
+      float buffer_energy = (float)referee->power_heat_data.buffer_energy;
+      if (buffer_energy < 30.0f) {
+        float pwr_scale = clip<float>(buffer_energy / 30.0f, 0.25f, 1.0f);
+        vel[0] *= pwr_scale;
+        vel[1] *= pwr_scale;
+        vel[2] *= pwr_scale;
+        vel[3] *= pwr_scale;
       }
     }
 
     // Flywheel Control:
     // Left flywheel (0x207): -900 rad/s
     // Right flywheel (0x208): +900 rad/s
-    // swl == DOWN enables flywheels; swl != DOWN disables them and applies smooth viscous braking
+    // swl == DOWN enables flywheels (provided shooter PMM power is active);
+    // swl != DOWN or shooter PMM power cut disables them and applies smooth viscous braking
     const float FLYWHEEL_TARGET_SPEED = 900.0f;
-    if (dbus->swl == remote::DOWN) {
+    if (dbus->swl == remote::DOWN && shooter_pmm_power) {
       if (!flywheel_enabled) {
         flywheel_enabled = true;
         left_flywheel_pid_.Reset();
@@ -720,16 +894,6 @@ void RM_RTOS_Default_Task(const void* args) {
       }
     }
 
-    // Referee System Regulation: If shooter 24V power is cut by referee, brake flywheels
-    if (referee && referee->connection_flag_ &&
-        !referee->game_robot_status.power_management_shooter_output) {
-      if (flywheel_enabled) {
-        flywheel_enabled = false;
-        left_flywheel_pid_.Reset();
-        right_flywheel_pid_.Reset();
-      }
-    }
-
     int16_t left_flywheel_output = 0;
     int16_t right_flywheel_output = 0;
     float left_omega = flywheel_motor[0]->GetOmega();
@@ -741,6 +905,10 @@ void RM_RTOS_Default_Task(const void* args) {
       float right_diff = FLYWHEEL_TARGET_SPEED - right_omega;
       left_flywheel_output = left_flywheel_pid_.ComputeConstrainedOutput(left_diff);
       right_flywheel_output = right_flywheel_pid_.ComputeConstrainedOutput(right_diff);
+    } else if (!shooter_pmm_power) {
+      // Software disabled: PMM shooter power cut by referee
+      left_flywheel_output = 0;
+      right_flywheel_output = 0;
     } else {
       // Active viscous dynamic braking:
       // Applies braking current strictly opposing the current spin direction (-k_brake * omega).
@@ -782,20 +950,19 @@ void RM_RTOS_Default_Task(const void* args) {
     // Each 17mm projectile adds 10 heat.
     // Exceeding limit locks launcher and blinds FPV until heat = 0.
     // Exceeding limit + 100 permanently locks launcher for the entire round.
-    if (referee && referee->connection_flag_) {
+    if (!shooter_pmm_power) {
+      feeder_requested = false;  // 24V shooter power cut by referee / PMM
+    } else if (referee && referee->connection_flag_) {
       uint16_t heat_limit = referee->game_robot_status.shooter_barrel_heat_limit;
       uint16_t current_heat = referee->power_heat_data.shooter_17mm_barrel_heat;
       if (heat_limit > 0 && (current_heat + 15 >= heat_limit)) {
         feeder_requested = false;  // Suppress feeding to avoid overheat penalty
       }
-      if (!referee->game_robot_status.power_management_shooter_output) {
-        feeder_requested = false;  // 24V shooter power cut by referee
-      }
     }
 
     float feeder_target_velocity = 0.0f;
     if (feeder_requested) {
-      feeder_target_velocity = 160.0f;
+      feeder_target_velocity = 130.0f;
     } else {
       feeder_jam_detect_count = 0;
       feeder_jam_pause_count = 0;
@@ -877,7 +1044,9 @@ void RM_RTOS_Default_Task(const void* args) {
     feeder_motor->SetOutput(feeder_output);
     yaw_motor->SetOutput(yaw_output);
     control::MotorDM3519::TransmitOutput(chassis_motor, 4);
-    control::Motor4310::TransmitOutput(gimbal_container, 1);
+    if (gimbal_pmm_power) {
+      control::Motor4310::TransmitOutput(gimbal_container, 1);
+    }
     control::MotorCANBase::TransmitOutput(dji_container, 4);
 
     // Throttled debug print every 500ms for heading and gimbal alignment verification
@@ -889,6 +1058,11 @@ void RM_RTOS_Default_Task(const void* args) {
       float muzzle_deg = RAD2DEG(yaw_motor->GetTheta() - YAW_MOTOR_OFFSET);
       print("[CONN] IMU: %5.1f | Field: %5.1f | Target: %5.1f | MuzzleRel: %5.1f deg | Pitch: %5.2f rad (%4.1f deg) | out: %d | err: %5.1f\r\n",
             imu_deg, field_deg, target_deg, muzzle_deg, gimbal_pos, RAD2DEG(gimbal_pos), yaw_output, RAD2DEG(delta_yaw));
+      print("[CHASSIS] M0(0x10): conn=%d w=%.2f | M1(0x12): conn=%d w=%.2f | M2(0x18): conn=%d w=%.2f | M3(0x16): conn=%d w=%.2f\r\n",
+            (int)chassis_motor[0]->connection_flag_, chassis_motor[0]->GetOmega(),
+            (int)chassis_motor[1]->connection_flag_, chassis_motor[1]->GetOmega(),
+            (int)chassis_motor[2]->connection_flag_, chassis_motor[2]->GetOmega(),
+            (int)chassis_motor[3]->connection_flag_, chassis_motor[3]->GetOmega());
       if (referee && referee->connection_flag_) {
         print("[REF] HP:%u/%u Heat:%u/%u Buf:%uJ PwrLim:%uW | ShotSpd:%.1fm/s\r\n",
               referee->game_robot_status.current_HP,

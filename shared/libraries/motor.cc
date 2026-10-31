@@ -827,8 +827,10 @@ void Motor4310::MotorEnable() {
   data[7] = 0xfc;
 
   connection_flag_ = false;
-  while (!connection_flag_) {
+  int retry = 0;
+  while (!connection_flag_ && retry++ < 20) {
     this->can_->Transmit(this->tx_id_actual_, data, 8);
+    this->can_->Transmit(this->tx_id_, data, 8);
     osDelay(10);
   }
 }
@@ -843,7 +845,11 @@ void Motor4310::MotorDisable() {
   data[5] = 0xff;
   data[6] = 0xff;
   data[7] = 0xfd;
-  this->can_->Transmit(this->tx_id_actual_, data, 8);
+  for (int i = 0; i < 3; i++) {
+    this->can_->Transmit(this->tx_id_actual_, data, 8);
+    this->can_->Transmit(this->tx_id_, data, 8);
+    osDelay(2);
+  }
 }
 
 void Motor4310::SetZeroPos() {
@@ -857,6 +863,7 @@ void Motor4310::SetZeroPos() {
   data[6] = 0xff;
   data[7] = 0xfe;
   this->can_->Transmit(this->tx_id_actual_, data, 8);
+  this->can_->Transmit(this->tx_id_, data, 8);
 }
 
 void Motor4310::SetOutput(float position, float velocity, float kp, float kd, float torque) {
@@ -1024,8 +1031,10 @@ void MotorDM3519::MotorEnable() {
   data[7] = 0xfc;  // Enable command - verify with DM3519 datasheet
 
   connection_flag_ = false;
-  while (!connection_flag_) {
+  int retry = 0;
+  while (!connection_flag_ && retry++ < 30) {
     this->can_->Transmit(this->tx_id_actual_, data, 8);
+    this->can_->Transmit(this->tx_id_, data, 8);
     osDelay(10);
   }
 }
@@ -1041,7 +1050,11 @@ void MotorDM3519::MotorDisable() {
   data[5] = 0xff;
   data[6] = 0xff;
   data[7] = 0xfd;  // Disable command - verify with DM3519 datasheet
-  this->can_->Transmit(this->tx_id_actual_, data, 8);
+  for (int i = 0; i < 3; i++) {
+    this->can_->Transmit(this->tx_id_actual_, data, 8);
+    this->can_->Transmit(this->tx_id_, data, 8);
+    osDelay(2);
+  }
 }
 
 void MotorDM3519::SetZeroPos() {
@@ -1056,6 +1069,7 @@ void MotorDM3519::SetZeroPos() {
   data[6] = 0xff;
   data[7] = 0xfe;  // Set zero command - verify with DM3519 datasheet
   this->can_->Transmit(this->tx_id_actual_, data, 8);
+  this->can_->Transmit(this->tx_id_, data, 8);
 }
 
 void MotorDM3519::SetOutput(float position, float velocity, float kp, float kd, float torque) {

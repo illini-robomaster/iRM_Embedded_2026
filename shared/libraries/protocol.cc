@@ -168,6 +168,9 @@ void Protocol::AppendFrame(uint8_t* data, int length) {
 /* ========================================================================= */
 
 bool Referee::ProcessDataRx(int cmd_id, const uint8_t* data, int length) {
+  if (rx_callback_ != nullptr) {
+    rx_callback_(cmd_id, data, length);
+  }
   switch (cmd_id) {
     case GAME_STATUS:
       if (length <= (int)sizeof(game_status)) memcpy(&game_status, data, length);

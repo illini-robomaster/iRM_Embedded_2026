@@ -208,6 +208,7 @@ class Motor2006 : public MotorCANBase {
  */
 class Motor3508 : public MotorCANBase {
  public:
+  uint32_t GetLastFeedbackMs() const { return last_feedback_ms_; }
   /* constructor wrapper over MotorCANBase */
   Motor3508(bsp::CAN* can, uint16_t rx_id);
   /* implements data update callback */
@@ -226,6 +227,7 @@ class Motor3508 : public MotorCANBase {
  private:
   volatile int16_t raw_current_get_ = 0;
   volatile uint8_t raw_temperature_ = 0;
+  volatile uint32_t last_feedback_ms_ = 0;
 };
 
 

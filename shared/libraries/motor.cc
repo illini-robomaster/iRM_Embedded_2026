@@ -129,6 +129,7 @@ void Motor3508::UpdateData(const uint8_t data[]) {
   theta_ = raw_theta * THETA_SCALE;
   omega_ = raw_omega * OMEGA_SCALE;
 
+  last_feedback_ms_ = HAL_GetTick();
   connection_flag_ = true;
 }
 

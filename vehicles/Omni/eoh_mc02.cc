@@ -284,7 +284,9 @@ void RM_RTOS_Threads_Init(void) {
 
 // Global peripherals
 bsp::CAN* can = nullptr;
-control::MotorDM3519* chassis_motor[4];
+control::Motor3508* chassis_motor[4];
+// Compatibility firmware feedback speed / wheel speed; verify before hardware use.
+constexpr float CHASSIS_FEEDBACK_TO_WHEEL_RATIO = 1.0f;
 control::Motor4310* gimbal_motor;
 control::Motor6020* yaw_motor;
 control::Motor3508* flywheel_motor[2];
@@ -475,11 +477,11 @@ void RM_RTOS_Init() {
    *  POS_VEL: position-velocity mode
    *  VEL: velocity mode  */
 
-  /* Make sure motor is set to the correct mode (in helper tool). Otherwise, motor won't start */
-  chassis_motor[0] = new control::MotorDM3519(can, 0x10, 0x11, control::VEL);  // front right
-  chassis_motor[1] = new control::MotorDM3519(can, 0x12, 0x13, control::VEL);  // back left
-  chassis_motor[2] = new control::MotorDM3519(can, 0x18, 0x19, control::VEL);  // back right
-  chassis_motor[3] = new control::MotorDM3519(can, 0x16, 0x17, control::VEL);  // front left
+  // Chassis requires DJI-compatible DM3519 firmware and motor IDs 1..4.
+  chassis_motor[0] = new control::Motor3508(can, 0x201);  // front right
+  chassis_motor[1] = new control::Motor3508(can, 0x202);  // back left
+  chassis_motor[2] = new control::Motor3508(can, 0x203);  // back right
+  chassis_motor[3] = new control::Motor3508(can, 0x204);  // front left
 
   gimbal_motor = new control::Motor4310(can, 0x1c, 0x1d, control::POS_VEL);
 
@@ -511,6 +513,14 @@ void RM_RTOS_Default_Task(const void* args) {
 
   control::Motor4310* gimbal_container[] = {gimbal_motor};
   control::MotorCANBase* dji_container[] = {yaw_motor, flywheel_motor[0], flywheel_motor[1], feeder_motor};
+  control::MotorCANBase* chassis_container[] = {
+      chassis_motor[0], chassis_motor[1], chassis_motor[2], chassis_motor[3]};
+  // Provisional bench PI gains and current-count cap, requiring hardware tuning.
+  control::ConstrainedPID chassis_pid[4] = {
+      {100.0f, 0.5f, 0.0f, 500.0f, 3000.0f},
+      {100.0f, 0.5f, 0.0f, 500.0f, 3000.0f},
+      {100.0f, 0.5f, 0.0f, 500.0f, 3000.0f},
+      {100.0f, 0.5f, 0.0f, 500.0f, 3000.0f}};
   // Standard RoboMaster feeder PID (from main_mc02.cc)
   control::PIDController feeder_pid_(40.0f, 5.0f, 10.0f);
   control::ConstrainedPID left_flywheel_pid_(30.0f, 0.8f, 0.0f, 3000.0f, 16384.0f);
@@ -534,19 +544,10 @@ void RM_RTOS_Default_Task(const void* args) {
 
   /* Use SetZeroPos if you want to set current motor position as zero position. If uncommented, the
    * zero position is the zero position set before */
-  // Enable the 0x10/0x11 motor last to test power-restoration timing.
-  const int chassis_enable_order[] = {1, 2, 3, 0};
+  // DJI current mode needs no DM enable sequence.
+  for (auto* motor : chassis_motor) motor->SetOutput(0);
+  control::MotorCANBase::TransmitOutput(chassis_container, 4);
   osDelay(1000);
-  for (int i : chassis_enable_order) {
-    chassis_motor[i]->MotorEnable();
-    osDelay(20);
-  }
-  // Startup experiment: repeat enable after all four motors have had time to boot.
-  osDelay(500);
-  for (int i : chassis_enable_order) {
-    chassis_motor[i]->MotorEnable();
-    osDelay(20);
-  }
   gimbal_motor->SetZeroPos();
   osDelay(50);
   gimbal_motor->MotorEnable();
@@ -602,10 +603,6 @@ void RM_RTOS_Default_Task(const void* args) {
     // disable logic: swl == UP shuts down all chassis, gimbal, feeder, and flywheel motors
     if (dbus->swl == remote::UP) {
       if (enabled) {
-        chassis_motor[0]->MotorDisable();
-        chassis_motor[1]->MotorDisable();
-        chassis_motor[2]->MotorDisable();
-        chassis_motor[3]->MotorDisable();
         gimbal_motor->MotorDisable();
         print("Disabled \r\n");
         enabled = false;
@@ -613,6 +610,11 @@ void RM_RTOS_Default_Task(const void* args) {
         dbus->DiscardMouseDelta();
       }
       flywheel_enabled = false;
+      for (int i = 0; i < 4; ++i) {
+        chassis_pid[i].Reset();
+        chassis_motor[i]->SetOutput(0);
+      }
+      control::MotorCANBase::TransmitOutput(chassis_container, 4);
       left_flywheel_pid_.Reset();
       right_flywheel_pid_.Reset();
       flywheel_motor[0]->SetOutput(0);
@@ -624,9 +626,7 @@ void RM_RTOS_Default_Task(const void* args) {
     } else {
       if (!enabled) {
         print("Enabled \r\n");
-        for (int i : chassis_enable_order) {
-          chassis_motor[i]->MotorEnable();
-        }
+        for (auto& pid : chassis_pid) pid.Reset();
         gimbal_motor->MotorEnable();
         float cur_pitch = gimbal_motor->GetTheta();
         gimbal_pos = clip<float>(cur_pitch < GIMBAL_PITCH_MAX ? cur_pitch : GIMBAL_PITCH_MAX,
@@ -656,27 +656,10 @@ void RM_RTOS_Default_Task(const void* args) {
       shooter_pmm_power = (prev_pmm_shooter != 0);
     }
 
-    // PMM Chassis Power handling (Issue 3):
-    // When 24V chassis power cuts, DM3519 motors physically lose power and shut down.
-    // When power returns, DM3519 motors boot into DISABLED state by default and ignore
-    // velocity commands until MotorEnable() (0xFF..0xFC) is re-sent.
-    if (!chassis_pmm_power) {
-      if (last_chassis_pmm_power) {
-        last_chassis_pmm_power = false;
-        print(">>> [PMM] Chassis power CUT by referee - stopping chassis <<<\r\n");
-      }
-    } else {
-      if (!last_chassis_pmm_power) {
-        last_chassis_pmm_power = true;
-        print(">>> [PMM] Chassis power RESTORED - re-enabling DM3519 motors <<<\r\n");
-        if (enabled) {
-          osDelay(1000);  // Recovery timing test: allow DM3519 internal MCUs to boot
-          for (int i : chassis_enable_order) {
-            chassis_motor[i]->MotorEnable();
-          }
-          print(">>> [PMM] Chassis motors re-enabled! <<<\r\n");
-        }
-      }
+    // DJI mode resumes through current commands; reset controllers on PMM transitions.
+    if (last_chassis_pmm_power != chassis_pmm_power) {
+      last_chassis_pmm_power = chassis_pmm_power;
+      for (auto& pid : chassis_pid) pid.Reset();
     }
 
     // PMM Gimbal Power handling (Issue 1):
@@ -1043,10 +1026,22 @@ void RM_RTOS_Default_Task(const void* args) {
     }
 
 
-    chassis_motor[0]->SetOutput(vel[0]);
-    chassis_motor[1]->SetOutput(vel[1]);
-    chassis_motor[2]->SetOutput(vel[2]);
-    chassis_motor[3]->SetOutput(vel[3]);
+    // A missing wheel feedback stops the whole chassis, not just that wheel.
+    bool chassis_feedback_fresh = true;
+    const uint32_t feedback_now = HAL_GetTick();
+    for (auto* motor : chassis_motor) {
+      chassis_feedback_fresh &= motor->connection_flag_ &&
+          feedback_now - motor->GetLastFeedbackMs() <= 100;
+    }
+    for (int i = 0; i < 4; ++i) {
+      if (!chassis_pmm_power || !chassis_feedback_fresh) {
+        chassis_pid[i].Reset();
+        chassis_motor[i]->SetOutput(0);
+      } else {
+        const float wheel_omega = chassis_motor[i]->GetOmega() / CHASSIS_FEEDBACK_TO_WHEEL_RATIO;
+        chassis_motor[i]->SetOutput(chassis_pid[i].ComputeConstrainedOutput(vel[i] - wheel_omega));
+      }
+    }
     // DM4310 in POS_VEL mode: 2nd argument is velocity limit (rad/s) for profile position tracking.
     // Must be positive non-zero so motor tracks gimbal_pos whether commanded by mouse, stick, or autoaim.
     const float GIMBAL_PITCH_TRACKING_VEL = 20.0f;
@@ -1055,7 +1050,7 @@ void RM_RTOS_Default_Task(const void* args) {
     flywheel_motor[1]->SetOutput(right_flywheel_output);
     feeder_motor->SetOutput(feeder_output);
     yaw_motor->SetOutput(yaw_output);
-    control::MotorDM3519::TransmitOutput(chassis_motor, 4);
+    control::MotorCANBase::TransmitOutput(chassis_container, 4);
     if (gimbal_pmm_power) {
       control::Motor4310::TransmitOutput(gimbal_container, 1);
     }
@@ -1070,7 +1065,7 @@ void RM_RTOS_Default_Task(const void* args) {
       float muzzle_deg = RAD2DEG(yaw_motor->GetTheta() - YAW_MOTOR_OFFSET);
       print("[CONN] IMU: %5.1f | Field: %5.1f | Target: %5.1f | MuzzleRel: %5.1f deg | Pitch: %5.2f rad (%4.1f deg) | out: %d | err: %5.1f\r\n",
             imu_deg, field_deg, target_deg, muzzle_deg, gimbal_pos, RAD2DEG(gimbal_pos), yaw_output, RAD2DEG(delta_yaw));
-      print("[CHASSIS] M0(0x10): conn=%d w=%.2f | M1(0x12): conn=%d w=%.2f | M2(0x18): conn=%d w=%.2f | M3(0x16): conn=%d w=%.2f\r\n",
+      print("[CHASSIS] M0(0x201): conn=%d w=%.2f | M1(0x202): conn=%d w=%.2f | M2(0x203): conn=%d w=%.2f | M3(0x204): conn=%d w=%.2f\r\n",
             (int)chassis_motor[0]->connection_flag_, chassis_motor[0]->GetOmega(),
             (int)chassis_motor[1]->connection_flag_, chassis_motor[1]->GetOmega(),
             (int)chassis_motor[2]->connection_flag_, chassis_motor[2]->GetOmega(),

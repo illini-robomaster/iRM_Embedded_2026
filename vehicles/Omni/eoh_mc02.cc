@@ -479,8 +479,8 @@ void RM_RTOS_Init() {
 
   // Chassis requires DJI-compatible DM3519 firmware and motor IDs 1..4.
   chassis_motor[0] = new control::Motor3508(can, 0x201);  // front right
-  chassis_motor[1] = new control::Motor3508(can, 0x202);  // back left
-  chassis_motor[2] = new control::Motor3508(can, 0x203);  // back right
+  chassis_motor[1] = new control::Motor3508(can, 0x203);  // back left
+  chassis_motor[2] = new control::Motor3508(can, 0x202);  // back right
   chassis_motor[3] = new control::Motor3508(can, 0x204);  // front left
 
   gimbal_motor = new control::Motor4310(can, 0x1c, 0x1d, control::POS_VEL);
@@ -1065,7 +1065,7 @@ void RM_RTOS_Default_Task(const void* args) {
       float muzzle_deg = RAD2DEG(yaw_motor->GetTheta() - YAW_MOTOR_OFFSET);
       print("[CONN] IMU: %5.1f | Field: %5.1f | Target: %5.1f | MuzzleRel: %5.1f deg | Pitch: %5.2f rad (%4.1f deg) | out: %d | err: %5.1f\r\n",
             imu_deg, field_deg, target_deg, muzzle_deg, gimbal_pos, RAD2DEG(gimbal_pos), yaw_output, RAD2DEG(delta_yaw));
-      print("[CHASSIS] M0(0x201): conn=%d w=%.2f | M1(0x202): conn=%d w=%.2f | M2(0x203): conn=%d w=%.2f | M3(0x204): conn=%d w=%.2f\r\n",
+      print("[CHASSIS] M0(0x201): conn=%d w=%.2f | M1(0x203): conn=%d w=%.2f | M2(0x202): conn=%d w=%.2f | M3(0x204): conn=%d w=%.2f\r\n",
             (int)chassis_motor[0]->connection_flag_, chassis_motor[0]->GetOmega(),
             (int)chassis_motor[1]->connection_flag_, chassis_motor[1]->GetOmega(),
             (int)chassis_motor[2]->connection_flag_, chassis_motor[2]->GetOmega(),

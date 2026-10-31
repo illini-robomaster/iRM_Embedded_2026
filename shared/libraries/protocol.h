@@ -20,11 +20,14 @@
 
 #pragma once
 
+#include <cstdint>
 #include "bsp_error_handler.h"
 
 namespace communication {
 
-constexpr int MAX_FRAME_LEN = 300;
+// RM2027 maximum frame length: VTM frame 0x0310 payload is 300 bytes + 9 bytes overhead = 309.
+// 512 bytes buffer provides safe headroom for all links.
+constexpr int MAX_FRAME_LEN = 512;
 
 typedef struct {
   uint8_t* data;
@@ -70,7 +73,7 @@ class Protocol {
   /**
    * @brief verify the frame with crc16
    *
-   * @param data      address for frame data`
+   * @param data      address for frame data
    * @param length    number of bytes in frame data
    * @return true for success; false for failure
    */
@@ -112,49 +115,24 @@ class Protocol {
   virtual int ProcessDataTx(int cmd_id, uint8_t* data) = 0;
 };
 
-/* Command for Referee */
-
-/*
- * 0x0001 GAME_STATUS
- * 0x0002 GAME_RESULT
- * 0x0003 GAME_ROBOT_HP
- * 0x0005 ICRA_BUFF_DEBUFF_ZONE_STATUS [X]
- * 0x0101 EVENT_DATA
- * 0x0102 SUPPLY_PROJECTILE_ACTION
- * 0x0104 REFEREE_WARNING
- * 0x0105 DART_REMAINING_TIME
- * 0x0201 GAME_ROBOT_STATUS
- * 0x0202 POWER_HEAT_DATA
- * 0x0203 GAME_ROBOT_POS
- * 0x0204 BUFF
- * 0x0205 AERIAL_ROBOT_ENERGY
- * 0x0206 ROBOT_HURT
- * 0x0207 SHOOT_DATA
- * 0x0208 BULLET_REMAINING
- * 0x0209 RFID_STATUS
- * 0x020A DART_CLIENT_CMD
- * 0x0301 STUDENT_INTERACTIVE
- * 0x0302 ROBOT_INTERACTIVE [x]
- * 0x0303 ROBOT_COMMAND [x]
- * 0x0304 ROBOT_COMMAND [x]
- * 0x0305 CLIENT_MAP_COMMAND [x]
- */
-
-/* TODO(neo): above information with [x] should be implemented when needed in the future*/
+/* ========================================================================= */
+/*                   RoboMaster 2027 Referee System Commands                 */
+/* ========================================================================= */
 
 typedef enum {
+  // Regular link (0x00xx - 0x03xx)
   GAME_STATUS = 0x0001,
   GAME_RESULT = 0x0002,
-  GAME_ROBOT_HP = 0x003,
+  GAME_ROBOT_HP = 0x0003,
   EVENT_DATA = 0x0101,
-  SUPPLY_PROJECTILE_ACTION = 0x0102,
+  SUPPLY_PROJECTILE_ACTION = 0x0102,  // Legacy compatibility
   REFEREE_WARNING = 0x0104,
   DART_REMAINING_TIME = 0x0105,
   GAME_ROBOT_STATUS = 0x0201,
   POWER_HEAT_DATA = 0x0202,
   GAME_ROBOT_POS = 0x0203,
   BUFF = 0x0204,
-  AERIAL_ROBOT_ENERGY = 0x0205,
+  AERIAL_ROBOT_ENERGY = 0x0205,       // Legacy compatibility
   ROBOT_HURT = 0x0206,
   SHOOT_DATA = 0x0207,
   BULLET_REMAINING = 0x0208,
@@ -165,53 +143,63 @@ typedef enum {
   SENTRY_INFO = 0x020D,
   RADAR_INFO = 0x020E,
   STUDENT_INTERACTIVE = 0x0301,
+  MAP_COMMAND = 0x0303,
+  MAP_ROBOT_DATA = 0x0305,
+  MAP_DATA = 0x0307,
+  CUSTOM_INFO = 0x0308,
 
+  // VTM link (921600 baud)
+  VTM_CUSTOM_TERMINAL_TX = 0x0310,
+  VTM_CUSTOM_TERMINAL_RX = 0x0311,
+
+  // Radar wireless link (intel from referee signal source)
+  RADAR_ENEMY_POS = 0x0A01,
+  RADAR_ENEMY_HP = 0x0A02,
+  RADAR_ENEMY_ALLOWANCE = 0x0A03,
+  RADAR_ENEMY_MACRO = 0x0A04,
+  RADAR_ENEMY_BUFFS = 0x0A05,
+  RADAR_ENEMY_KEY = 0x0A06,
 } referee_cmd;
 
-/* ===== GAME_STATUS 0x0001 1Hz ===== */
+/* ===== GAME_STATUS 0x0001 (11 B, 1 Hz) ===== */
 typedef struct {
-  uint8_t game_type : 4;
-  uint8_t game_progress : 4;
-  uint16_t stage_remain_time;
-
-  uint64_t SyncTimeStamp;
+  uint8_t game_type : 4;       // 1 RMUC, 2 Single, 3 ICRA RMUA, 4 RMUL 3v3, 5 RMUL infantry
+  uint8_t game_progress : 4;   // 0 not started, 1 prep, 2 self-check, 3 countdown, 4 in game, 5 settling
+  uint16_t stage_remain_time;  // s
+  uint64_t SyncTimeStamp;      // UNIX timestamp (valid after NTP sync)
 } __packed game_status_t;
 
-/* ===== GAME_RESULT 0x0002 ===== */
+/* ===== GAME_RESULT 0x0002 (1 B, On match end) ===== */
 typedef struct {
-  uint8_t winner;
+  uint8_t winner;  // 0 draw, 1 red, 2 blue
 } __packed game_result_t;
 
-/* ===== GAME_ROBOT_HP 0x0003 1Hz ===== */
+/* ===== GAME_ROBOT_HP 0x0003 (24 B, 3 Hz) ===== */
 typedef struct {
-  uint16_t red_1_robot_HP;
-  uint16_t red_2_robot_HP;
-  uint16_t red_3_robot_HP;
-  uint16_t red_4_robot_HP;
-  uint16_t red_5_robot_HP;
-  uint16_t red_6_robot_HP;
-  uint16_t red_7_robot_HP;
-
-  uint16_t red_outpost_HP;
-  uint16_t red_base_HP;
-
-  uint16_t blue_1_robot_HP;
-  uint16_t blue_2_robot_HP;
-  uint16_t blue_3_robot_HP;
-  uint16_t blue_4_robot_HP;
-  uint16_t blue_5_robot_HP;
-  uint16_t blue_7_robot_HP;
-
-  uint16_t blue_outpost_HP;
-  uint16_t blue_base_HP;
+  uint16_t ally_1_robot_HP;       // Heavy robot (slot 1)
+  uint16_t reserved;              // Slot 2 reserved (former Engineer)
+  uint16_t ally_3_robot_HP;       // Infantry 3
+  uint16_t ally_4_robot_HP;       // Infantry 4
+  int16_t damage_difference;      // Own total damage minus enemy total damage
+  uint16_t ally_7_robot_HP;       // Sentry robot
+  uint16_t outpost_R_HP;          // Red-side outpost HP at match start
+  uint16_t ally_base_HP;          // Ally base HP
+  uint16_t outpost_B_HP;          // Blue-side outpost HP at match start
+  uint16_t enemy_base_HP;         // Enemy base HP
+  uint16_t ally_control_degree;   // Cumulative ally control degree
+  uint16_t enemy_control_degree;  // Cumulative enemy control degree
 } __packed game_robot_HP_t;
 
-/* ===== EVENT_DATA 0x0101 1Hz ===== */
+/* ===== EVENT_DATA 0x0101 (8 B, 1 Hz) ===== */
 typedef struct {
-  uint32_t event_type;
+  union {
+    uint32_t event_data;
+    uint32_t event_type;  // Legacy alias
+  };
+  uint32_t event_data_2;
 } __packed event_data_t;
 
-/* ===== SUPPLY_PROJECTILE_ACTION 0x0102 ===== */
+/* ===== SUPPLY_PROJECTILE_ACTION 0x0102 (Legacy compatibility) ===== */
 typedef struct {
   uint8_t supply_projectile_id;
   uint8_t supply_robot_id;
@@ -219,141 +207,249 @@ typedef struct {
   uint8_t supply_projectile_num;
 } __packed supply_projectile_action_t;
 
-/* ===== REFEREE_WARNING 0x0104 ===== */
+/* ===== REFEREE_WARNING 0x0104 (3 B, On penalty / 1 Hz) ===== */
 typedef struct {
-  uint8_t level;
-  uint8_t foul_robot_id;
+  uint8_t level;  // 1 both yellow, 2 yellow, 3 red, 4 forfeit
+  union {
+    uint8_t offending_robot_id;
+    uint8_t foul_robot_id;  // Legacy alias
+  };
   uint8_t count;
 } __packed referee_warning_t;
 
-/* ===== DART_REMAINING_TIME 0x0105 1Hz ===== */
+/* ===== DART_REMAINING_TIME / DART_INFO 0x0105 (3 B, 1 Hz) ===== */
 typedef struct {
   uint8_t dart_remaining_time;
   uint16_t dart_info;
 } __packed dart_remaining_time_t;
+using dart_info_t = dart_remaining_time_t;
 
-/* ===== GAME_ROBOT_STATUS 0x0201 10Hz ===== */
+/* ===== GAME_ROBOT_STATUS 0x0201 (17 B, 10 Hz) ===== */
 typedef struct {
   uint8_t robot_id;
   uint8_t robot_level;
-  uint16_t remain_HP;
-  uint16_t max_HP;
-
+  union {
+    uint16_t current_HP;
+    uint16_t remain_HP;  // Legacy alias
+  };
+  union {
+    uint16_t maximum_HP;
+    uint16_t max_HP;     // Legacy alias
+  };
   uint16_t shooter_barrel_cooling_value;
   uint16_t shooter_barrel_heat_limit;
-
   uint16_t chassis_power_limit;
-  uint8_t mains_power_gimbal_output : 1;
-  uint8_t mains_power_chassis_output : 1;
-  uint8_t mains_power_shooter_output : 1;
+  float bullet_speed_limit;
+  union {
+    struct {
+      uint8_t power_management_gimbal_output : 1;
+      uint8_t power_management_chassis_output : 1;
+      uint8_t power_management_shooter_output : 1;
+    };
+    struct {
+      uint8_t mains_power_gimbal_output : 1;
+      uint8_t mains_power_chassis_output : 1;
+      uint8_t mains_power_shooter_output : 1;
+    };
+  };
 } __packed game_robot_status_t;
+using robot_status_t = game_robot_status_t;
 
-/* ===== POWER_HEAT_DATA 0x0202 50Hz ===== */
+/* ===== POWER_HEAT_DATA 0x0202 (14 B, 10 Hz) ===== */
+// Note: In RM2027 bytes 0-7 are reserved; chassis voltage/current/power are no longer provided.
 typedef struct {
-  uint16_t chassis_volt;
-  uint16_t chassis_current;
-  float chassis_power;
-  uint16_t chassis_power_buffer;
-  uint16_t shooter_id1_17mm_cooling_heat;
-  uint16_t shooter_id2_17mm_cooling_heat;
-  uint16_t shooter_id1_42mm_cooling_heat;
+  union {
+    struct {
+      uint16_t reserved0;
+      uint16_t reserved1;
+      uint16_t reserved2;
+      uint16_t reserved3;
+    };
+    struct {
+      uint16_t chassis_volt;
+      uint16_t chassis_current;
+      float chassis_power;
+    };
+  };
+  union {
+    uint16_t buffer_energy;
+    uint16_t chassis_power_buffer;  // Legacy alias
+  };
+  union {
+    uint16_t shooter_17mm_barrel_heat;
+    uint16_t shooter_id1_17mm_cooling_heat;  // Legacy alias
+  };
+  union {
+    uint16_t shooter_42mm_barrel_heat;
+    uint16_t shooter_id1_42mm_cooling_heat;  // Legacy alias
+  };
 } __packed power_heat_data_t;
 
-/* ===== GAME_ROBOT_POS 0x0203 10Hz ===== */
+/* ===== GAME_ROBOT_POS 0x0203 (12 B, 1 Hz) ===== */
 typedef struct {
-  float x;
-  float y;
-  float yaw;
+  float x;  // m
+  float y;  // m
+  union {
+    float angle;  // deg (speed-module heading, 0 = north)
+    float yaw;    // Legacy alias
+  };
 } __packed game_robot_pos_t;
+using robot_pos_t = game_robot_pos_t;
 
-/* ===== BUFF 0x0204 1Hz ===== */
+/* ===== BUFF 0x0204 (7 B, 3 Hz) ===== */
 typedef struct {
-  uint8_t recovery_buff;
-  uint8_t cooling_buff;
-  uint8_t defence_buff;
-  uint8_t vulnerability_buff;
-  uint16_t attack_buff;
+  uint8_t recovery_buff;        // % max HP/s
+  uint16_t cooling_buff;        // cooling heat/s
+  uint8_t defence_buff;         // %
+  uint8_t vulnerability_buff;   // %
+  uint16_t attack_buff;         // %
 } __packed buff_t;
 
-/* ===== AERIAL_ROBOT_ENERGY 0x0205 10Hz ===== */
+/* ===== AERIAL_ROBOT_ENERGY 0x0205 (Legacy compatibility) ===== */
 typedef struct {
   uint8_t airforce_status;
   uint8_t time_remain;
 } __packed aerial_robot_energy_t;
 
-/* ===== ROBOT_HURT 0x0206 ===== */
+/* ===== ROBOT_HURT / HURT_DATA 0x0206 (7 B, On damage event) ===== */
 typedef struct {
-  uint8_t armor_id : 4;
-  uint8_t hurt_type : 4;
+  union {
+    struct {
+      uint8_t armor_id : 4;
+      uint8_t HP_deduction_reason : 4;  // 0 projectile, 1 armor offline, 2 cap offline, 5 collision
+    };
+    struct {
+      uint8_t armor_type : 4;
+      uint8_t hurt_type : 4;  // Legacy alias
+    };
+  };
+  uint16_t hit_sequence;
+  int16_t hit_position_x;  // mm (origin = armor face bottom-left)
+  int16_t hit_position_y;  // mm
 } __packed robot_hurt_t;
+using hurt_data_t = robot_hurt_t;
 
-/* ===== SHOOT_DATA 0x0207 ===== */
+/* ===== SHOOT_DATA 0x0207 (7 B, On each shot) ===== */
 typedef struct {
-  uint8_t bullet_type;
-  uint8_t shooter_id;
-  uint8_t bullet_freq;
-  float bullet_speed;
+  uint8_t bullet_type;  // 1 = 17mm, 2 = 42mm
+  union {
+    uint8_t shooter_number;  // 1 = 17mm, 2 reserved, 3 = 42mm
+    uint8_t shooter_id;      // Legacy alias
+  };
+  union {
+    uint8_t launching_frequency;  // Hz
+    uint8_t bullet_freq;          // Legacy alias
+  };
+  union {
+    float initial_speed;  // m/s
+    float bullet_speed;   // Legacy alias
+  };
 } __packed shoot_data_t;
 
-/* ===== BULLET_REMAINING 0x0208 10Hz ===== */
+/* ===== BULLET_REMAINING / PROJECTILE_ALLOWANCE 0x0208 (8 B, 10 Hz) ===== */
 typedef struct {
-  uint16_t bullet_remaining_num_17mm;
-  uint16_t bullet_remaining_num_42mm;
-  uint16_t coin_remaining_num;
-} __packed bullet_remaining_t;
+  union {
+    uint16_t allowance_17mm;
+    uint16_t bullet_remaining_num_17mm;  // Legacy alias
+  };
+  union {
+    uint16_t allowance_42mm;
+    uint16_t bullet_remaining_num_42mm;  // Legacy alias
+  };
+  union {
+    uint16_t remaining_gold_coin;
+    uint16_t coin_remaining_num;         // Legacy alias
+  };
+  uint16_t allowance_fortress;
+} __packed projectile_allowance_t;
+using bullet_remaining_t = projectile_allowance_t;
 
-/* ===== RFID_STATUS 0x0209 1Hz ===== */
+/* ===== RFID_STATUS 0x0209 (6 B, 3 Hz) ===== */
 typedef struct {
   uint32_t rfid_status;
+  uint16_t rfid_status_2;
 } __packed rfid_status_t;
 
-/* ===== DART_CLIENT_CMD 0x020A 10Hz ===== */
+/* ===== DART_CLIENT_CMD 0x020A (6 B, 3 Hz) ===== */
 typedef struct {
-  uint8_t dart_launch_opening_status;
-  uint8_t dart_attack_target;
+  uint8_t dart_launch_opening_status;  // 0 open, 1 closed, 2 opening/closing
+  union {
+    uint8_t reserved;
+    uint8_t dart_attack_target;        // Legacy alias
+  };
   uint16_t target_change_time;
-  uint16_t operate_launch_cmd_time;
+  union {
+    uint16_t latest_launch_cmd_time;
+    uint16_t operate_launch_cmd_time;   // Legacy alias
+  };
 } __packed dart_client_cmd_t;
 
-
-/* ====== GROUND_ROBOT_POSITION 0x020B 1Hz ====== */
+/* ===== GROUND_ROBOT_POSITION 0x020B (40 B, 1 Hz) ===== */
 typedef struct {
-  float hero_x;
-  float hero_y;
-  float engiener_x;
-  float engineer_y;
-  float standard_3_x;
-  float standard_3_y;
-  float standard_4_x;
-  float standard_4_y;
-  float standard_5_x;
-  float standard_5_y;
-
+  union {
+    float heavy_x;
+    float hero_x;  // Legacy alias
+  };
+  union {
+    float heavy_y;
+    float hero_y;  // Legacy alias
+  };
+  union {
+    float reserved1;
+    float engiener_x;  // Legacy alias
+  };
+  union {
+    float reserved2;
+    float engineer_y;  // Legacy alias
+  };
+  union {
+    float infantry_3_x;
+    float standard_3_x;  // Legacy alias
+  };
+  union {
+    float infantry_3_y;
+    float standard_3_y;  // Legacy alias
+  };
+  union {
+    float infantry_4_x;
+    float standard_4_x;  // Legacy alias
+  };
+  union {
+    float infantry_4_y;
+    float standard_4_y;  // Legacy alias
+  };
+  union {
+    float reserved3;
+    float standard_5_x;  // Legacy alias
+  };
+  union {
+    float reserved4;
+    float standard_5_y;  // Legacy alias
+  };
 } __packed ground_robot_position_t;
 
-
-/* ====== RADAR_MARK_PROGRESS 0x020C 1Hz ======= */
-typedef struct 
-{ 
-  uint8_t mark_hero_progress; 
-  uint8_t mark_engineer_progress; 
-  uint8_t mark_standard_3_progress; 
-  uint8_t mark_standard_4_progress; 
-  uint8_t mark_standard_5_progress; 
-  uint8_t mark_sentry_progress; 
+/* ===== RADAR_MARK_PROGRESS 0x020C (2 B, 1 Hz) ===== */
+typedef struct {
+  uint16_t mark_progress;
 } __packed radar_mark_data_t;
 
-/* ====== SENTRY_INFO 0x020D 1Hz ======= */
-typedef  struct 
-{ 
-  uint32_t sentry_info; 
-  uint16_t sentry_info_2; 
+/* ===== SENTRY_INFO 0x020D (14 B, 1 Hz) ===== */
+typedef struct {
+  uint32_t sentry_info;
+  uint16_t sentry_info_2;
+  uint64_t sentry_info_3;
 } __packed sentry_info_t;
 
-/* ====== RADAR_INFO 0x020E 1Hz =======  */
+/* ===== RADAR_INFO 0x020E (8 B, 1 Hz) ===== */
 typedef struct {
   uint8_t radar_info;
+  uint8_t radar_info_2;
+  uint16_t fortify_center_x;
+  uint16_t fortify_center_y;
+  uint16_t fortify_radius;
 } __packed radar_info_t;
+
+/* ===== 0x0301 STUDENT_INTERACTIVE SUB-COMMANDS ===== */
 
 typedef struct {
   uint16_t data_cmd_id;
@@ -363,7 +459,7 @@ typedef struct {
 
 typedef struct {
   UI_header_data_t header;
-  uint8_t data[];
+  uint8_t data[112];
 } __packed robot_interactive_data_t;
 
 typedef struct {
@@ -387,6 +483,22 @@ typedef struct {
   uint32_t end_x : 11;
   uint32_t end_y : 11;
 } __packed graphic_data_t;
+
+typedef struct {
+  uint8_t figure_name[3];
+  uint32_t operate_type : 3;
+  uint32_t figure_type : 3;
+  uint32_t layer : 4;
+  uint32_t color : 4;
+  uint32_t details_a : 9;
+  uint32_t details_b : 9;
+  uint32_t width : 10;
+  uint32_t start_x : 11;
+  uint32_t start_y : 11;
+  uint32_t details_c : 10;
+  uint32_t details_d : 11;
+  uint32_t details_e : 11;
+} __packed interaction_figure_t;
 
 typedef struct {
   UI_header_data_t header;
@@ -414,6 +526,153 @@ typedef struct {
   uint8_t data[30];
 } __packed graphic_character_t;
 
+/* Sub-ID 0x0120 Sentry Decision Command (4 B payload, receiver 0x8080) */
+typedef struct {
+  UI_header_data_t header;
+  uint32_t sentry_cmd;
+} __packed sentry_decision_cmd_t;
+
+/* Sub-ID 0x0121 Radar Decision Command (13 B payload, receiver 0x8080) */
+typedef struct {
+  UI_header_data_t header;
+  uint8_t radar_cmd;
+  uint8_t password_cmd;
+  uint8_t password[6];
+  uint8_t armor_fortify_cmd;
+  uint16_t fortify_center_x;
+  uint16_t fortify_center_y;
+} __packed radar_decision_cmd_t;
+
+/* ===== 0x0303 MAP_COMMAND (12 B, Client -> Robot) ===== */
+typedef struct {
+  float target_position_x;  // m
+  float target_position_y;  // m
+  uint8_t cmd_keyboard;
+  uint8_t target_robot_id;
+  uint16_t cmd_source;
+} __packed map_command_t;
+
+/* ===== 0x0305 MAP_ROBOT_DATA (48 B, Radar -> Minimap) ===== */
+typedef struct {
+  uint16_t x;  // cm
+  uint16_t y;  // cm
+} __packed map_robot_pos_t;
+
+typedef struct {
+  map_robot_pos_t enemy_heavy;
+  map_robot_pos_t enemy_reserved1;
+  map_robot_pos_t enemy_infantry_3;
+  map_robot_pos_t enemy_infantry_4;
+  map_robot_pos_t enemy_reserved2;
+  map_robot_pos_t enemy_sentry;
+  map_robot_pos_t ally_heavy;
+  map_robot_pos_t ally_reserved1;
+  map_robot_pos_t ally_infantry_3;
+  map_robot_pos_t ally_infantry_4;
+  map_robot_pos_t ally_reserved2;
+  map_robot_pos_t ally_sentry;
+} __packed map_robot_data_t;
+
+/* ===== 0x0307 MAP_DATA (105 B, Sentry/Semi-auto -> Minimap) ===== */
+typedef struct {
+  uint8_t intention;          // 1 attack, 2 defend, 3 move
+  uint16_t start_position_x;  // dm
+  uint16_t start_position_y;  // dm
+  int8_t delta_x[49];         // dm
+  int8_t delta_y[49];         // dm
+  uint16_t sender_id;
+} __packed map_data_t;
+
+/* ===== 0x0308 CUSTOM_INFO (34 B, Robot -> Client UTF-16) ===== */
+typedef struct {
+  uint16_t sender_id;
+  uint16_t receiver_id;
+  uint8_t user_data[30];      // UTF-16LE text
+} __packed custom_info_t;
+
+/* ===== VTM LINK COMMANDS (921600 baud) ===== */
+
+/* 0x0310 Robot -> Custom Terminal (300 B) */
+typedef struct {
+  uint8_t data[300];
+} __packed vtm_custom_terminal_tx_t;
+
+/* 0x0311 Custom Terminal -> Robot (60 B) */
+typedef struct {
+  uint8_t data[60];
+} __packed vtm_custom_terminal_rx_t;
+
+/* ===== RADAR WIRELESS LINK COMMANDS (0x0A01 - 0x0A06) ===== */
+
+/* 0x0A01 Enemy Positions (24 B, cm) */
+typedef struct {
+  map_robot_pos_t heavy;
+  map_robot_pos_t reserved1;
+  map_robot_pos_t infantry_3;
+  map_robot_pos_t infantry_4;
+  map_robot_pos_t reserved2;
+  map_robot_pos_t sentry;
+} __packed radar_enemy_pos_t;
+
+/* 0x0A02 Enemy HP (12 B) */
+typedef struct {
+  uint16_t heavy_hp;
+  uint16_t reserved1;
+  uint16_t infantry_3_hp;
+  uint16_t infantry_4_hp;
+  uint16_t reserved2;
+  uint16_t sentry_hp;
+} __packed radar_enemy_hp_t;
+
+/* 0x0A03 Enemy Projectile Allowance (10 B) */
+typedef struct {
+  uint16_t heavy_allowance;
+  uint16_t infantry_3_allowance;
+  uint16_t infantry_4_allowance;
+  uint16_t reserved;
+  uint16_t sentry_allowance;
+} __packed radar_enemy_allowance_t;
+
+/* 0x0A04 Enemy Macro Status (12 B) */
+typedef struct {
+  uint16_t enemy_remaining_gold;
+  uint16_t enemy_total_gold;
+  uint32_t enemy_buff_status;
+  uint32_t enemy_mechanism_status;
+} __packed radar_enemy_macro_t;
+
+/* 0x0A05 Enemy Buffs / States (47 B) */
+typedef struct {
+  uint8_t recovery_buff;
+  uint16_t cooling_buff;
+  uint8_t defence_buff;
+  uint8_t vulnerability_buff;
+  uint16_t attack_buff;
+} __packed radar_robot_buff_t;
+
+typedef struct {
+  radar_robot_buff_t heavy_buff;
+  radar_robot_buff_t reserved1_buff;
+  radar_robot_buff_t infantry_3_buff;
+  radar_robot_buff_t infantry_4_buff;
+  radar_robot_buff_t sentry_buff;
+  uint8_t enemy_sentry_posture;
+  uint8_t heavy_main_state;
+  uint8_t reserved1_main_state;
+  uint8_t infantry_3_main_state;
+  uint8_t infantry_4_main_state;
+  uint8_t sentry_main_state;
+  uint16_t fortify_center_x;  // mm
+  uint16_t fortify_center_y;  // mm
+  uint16_t fortify_radius;    // mm
+} __packed radar_enemy_buffs_t;
+
+/* 0x0A06 Enemy Jamming-wave Key (6 B, ASCII) */
+typedef struct {
+  uint8_t password[6];
+} __packed radar_enemy_key_t;
+
+/* ===== UI Content Selection Enum ===== */
 typedef enum {
   NO_GRAPH,
   DELETE_GRAPH,
@@ -422,10 +681,14 @@ typedef enum {
   FIVE_GRAPH,
   SEVEN_GRAPH,
   CHAR_GRAPH,
+  SENTRY_CMD_GRAPH,
+  RADAR_CMD_GRAPH,
+  CUSTOM_DATA_GRAPH,
 } content;
 
 class Referee : public Protocol {
  public:
+  // Regular link data
   game_status_t game_status{};
   game_result_t game_result{};
   game_robot_HP_t game_robot_HP{};
@@ -440,7 +703,7 @@ class Referee : public Protocol {
   aerial_robot_energy_t aerial_robot_energy{};
   robot_hurt_t robot_hurt{};
   shoot_data_t shoot_data{};
-  bullet_remaining_t bullet_remaining{};
+  projectile_allowance_t bullet_remaining{};
   rfid_status_t rfid_status{};
   dart_client_cmd_t dart_client_cmd{};
   ground_robot_position_t ground_robot_position{};
@@ -448,43 +711,47 @@ class Referee : public Protocol {
   sentry_info_t sentry_info{};
   radar_info_t radar_info{};
 
+  // UI & Student interactive structures
   graphic_delete_t graphic_delete{};
   graphic_single_t graphic_single{};
   graphic_double_t graphic_double{};
   graphic_five_t graphic_five{};
   graphic_seven_t graphic_seven{};
   graphic_character_t graphic_character{};
+  sentry_decision_cmd_t sentry_decision_cmd{};
+  radar_decision_cmd_t radar_decision_cmd{};
+  robot_interactive_data_t robot_interactive_data{};
+
+  // Minimap commands
+  map_command_t map_command{};
+  map_robot_data_t map_robot_data{};
+  map_data_t map_data{};
+  custom_info_t custom_info{};
+
+  // VTM Link
+  vtm_custom_terminal_tx_t vtm_custom_terminal_tx{};
+  vtm_custom_terminal_rx_t vtm_custom_terminal_rx{};
+
+  // Radar wireless link
+  radar_enemy_pos_t radar_enemy_pos{};
+  radar_enemy_hp_t radar_enemy_hp{};
+  radar_enemy_allowance_t radar_enemy_allowance{};
+  radar_enemy_macro_t radar_enemy_macro{};
+  radar_enemy_buffs_t radar_enemy_buffs{};
+  radar_enemy_key_t radar_enemy_key{};
 
   void PrepareUIContent(content graph_content);
 
  private:
-  /**
-   * @brief process the data for certain command and update corresponding status variables
-   *
-   * @param cmd_id    command id
-   * @param data      address for command data
-   * @param length    number of bytes in command data
-   * @return true for success; false for failure
-   */
   bool ProcessDataRx(int cmd_id, const uint8_t* data, int length) final;
-
-  /**
-   * @brief process the information for certain command and copy it into the buffer named as data
-   *
-   * @param cmd_id
-   * @param data
-   * @return length of the data that is copied into buffer
-   */
   int ProcessDataTx(int cmd_id, uint8_t* data) final;
 
   content graph_content_ = NO_GRAPH;
 };
 
-/* Command for Host */
-
-/*
- * 0x0401 PACK
- */
+/* ========================================================================= */
+/*                          Command for Host (MiniPC)                        */
+/* ========================================================================= */
 
 typedef enum {
   PACK = 0x0401,
@@ -493,25 +760,21 @@ typedef enum {
   SHOOT_CMD = 0x0404,
 } host_cmd;
 
-/* ===== PACK 0x0401 ===== */
 typedef struct {
-  char chars[256];  // a string with maximum 256 chars
+  char chars[256];
 } __packed pack_t;
 
-/* ===== TARGET_ANGLE 0x0402 ===== */
 typedef struct {
-  float pitch;  // TODO: decide RAD / degree with CV group
+  float pitch;
   float yaw;
 } __packed target_angle_t;
 
-/* ===== NO_TARGET_FLAG 0x0403 ===== */
 typedef struct {
-  char dummy;  // no actual meaning
+  char dummy;
 } __packed no_target_flag_t;
 
-/* ===== SHOOT_CMD 0x0404 ===== */
 typedef struct {
-  char dummy;  // no actual meaning
+  char dummy;
 } __packed shoot_cmd_t;
 
 class Host : public Protocol {
@@ -522,23 +785,7 @@ class Host : public Protocol {
   shoot_cmd_t shoot_cmd{};
 
  private:
-  /**
-   * @brief process the data for certain command and update corresponding status variables
-   *
-   * @param cmd_id    command id
-   * @param data      address for command data
-   * @param length    number of bytes in command data
-   * @return true for success; false for failure
-   */
   bool ProcessDataRx(int cmd_id, const uint8_t* data, int length) final;
-
-  /**
-   * @brief process the information for certain command and copy it into the buffer named as data
-   *
-   * @param cmd_id
-   * @param data
-   * @return length of the data that is copied into buffer
-   */
   int ProcessDataTx(int cmd_id, uint8_t* data) final;
 };
 

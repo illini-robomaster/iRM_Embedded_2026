@@ -38,14 +38,18 @@
 #include "vision_can_protocol.h"
 #include "bsp_imu.h"
 #include "bsp_print.h"
+#include "bsp_uart.h"
 #include "cmsis_os.h"
 #include "dbus.h"
 #include "main.h"
 #include "mouse_gimbal_step.h"
 #include "motor.h"
+#include "protocol.h"
 #include "spi.h"
+#include "usart.h"
 
-#define RX_SIGNAL (1 << 0)
+#define IMU_RX_SIGNAL (1 << 0)
+#define REFEREE_RX_SIGNAL (1 << 1)
 
 // Blocking UART prints stall the control loop (motors hold the last command) -> jerks.
 #define EOH_DEBUG_PRINT 0
@@ -86,7 +90,7 @@ class IMU_GYRO_INT : public bsp::GPIT {
 
  protected:
   void IntCallback() override {
-    osThreadFlagsSet(imuTaskHandle, RX_SIGNAL);
+    osThreadFlagsSet(imuTaskHandle, IMU_RX_SIGNAL);
   }
 };
 
@@ -119,8 +123,8 @@ void imuTask(void* arg) {
   accel_int = new IMU_ACCEL_INT();
 
   while (true) {
-    uint32_t flags = osThreadFlagsWait(RX_SIGNAL, osFlagsWaitAll, osWaitForever);
-    if (flags & RX_SIGNAL) {
+    uint32_t flags = osThreadFlagsWait(IMU_RX_SIGNAL, osFlagsWaitAll, osWaitForever);
+    if (flags & IMU_RX_SIGNAL) {
       bmi088->Read(gyro, accel, &temp);
 
       float gx_rad = DEG2RAD(gyro[0]);
@@ -140,8 +144,50 @@ void imuTask(void* arg) {
   }
 }
 
+/* ========================================================================= */
+/*                          Referee System UART Task                         */
+/* ========================================================================= */
+
+const osThreadAttr_t refereeTaskAttribute = {.name = "refereeTask",
+                                             .attr_bits = osThreadDetached,
+                                             .cb_mem = nullptr,
+                                             .cb_size = 0,
+                                             .stack_mem = nullptr,
+                                             .stack_size = 512 * 4,
+                                             .priority = (osPriority_t)osPriorityNormal,
+                                             .tz_module = 0,
+                                             .reserved = 0};
+osThreadId_t refereeTaskHandle;
+
+class RefereeUART : public bsp::UART {
+ public:
+  using bsp::UART::UART;
+
+ protected:
+  void RxCompleteCallback() final { osThreadFlagsSet(refereeTaskHandle, REFEREE_RX_SIGNAL); }
+};
+
+static communication::Referee* referee = nullptr;
+static RefereeUART* referee_uart = nullptr;
+
+void refereeTask(void* arg) {
+  UNUSED(arg);
+  uint8_t* rx_data = nullptr;
+
+  while (true) {
+    uint32_t flags = osThreadFlagsWait(REFEREE_RX_SIGNAL, osFlagsWaitAll, osWaitForever);
+    if (flags & REFEREE_RX_SIGNAL) {
+      int32_t length = referee_uart->Read(&rx_data);
+      if (length > 0 && rx_data != nullptr && referee != nullptr) {
+        referee->Receive(communication::package_t{rx_data, (int)length});
+      }
+    }
+  }
+}
+
 void RM_RTOS_Threads_Init(void) {
   imuTaskHandle = osThreadNew(imuTask, nullptr, &imuTaskAttribute);
+  refereeTaskHandle = osThreadNew(refereeTask, nullptr, &refereeTaskAttribute);
 }
 
 // Global peripherals
@@ -207,7 +253,9 @@ static void BoardStateCanMainTaskStep() {
     taskENTER_CRITICAL();
     std::memcpy(state.q, quat, sizeof(state.q));
     taskEXIT_CRITICAL();
-    state.bullet_speed = 0.0f;  // No referee input on this target yet.
+    state.bullet_speed = (referee && referee->connection_flag_)
+                             ? referee->shoot_data.initial_speed
+                             : 0.0f;
     state.mode[0] = 0;          // Opaque; no mode semantics assigned here.
     board_state_server.StartSample(state, now_ms);
   }
@@ -351,6 +399,15 @@ void RM_RTOS_Init() {
   // MC02 uses UART5 for DBUS
   dbus = new remote::DBUS(&huart5);
 
+  // Initialize Referee System on UART1 (115200 8N1 standard regular link)
+  huart1.Init.BaudRate = 115200;
+  HAL_UART_Init(&huart1);
+
+  referee_uart = new RefereeUART(&huart1);
+  referee_uart->SetupRx(512);
+  referee_uart->SetupTx(512);
+  referee = new communication::Referee;
+
   // IMU initialization is in imuTask() - HAL_Delay() in BMI088 constructor
   // hangs when called before the RTOS scheduler starts
 }
@@ -476,7 +533,7 @@ void RM_RTOS_Default_Task(const void* args) {
     // Auto-spin logic on swr == DOWN
     // Higher spin speed of 9.0 rad/s
     // (Remote wheel dial is broken / ignored).
-    const float AUTO_SPIN_SPEED = 9.0f;
+    const float AUTO_SPIN_SPEED = 15.0f;
     float auto_yaw_omega = (dbus->swr == remote::DOWN) ? AUTO_SPIN_SPEED : 0.0f;
     float chassis_yaw_omega_target = auto_yaw_omega;
 
@@ -606,6 +663,27 @@ void RM_RTOS_Default_Task(const void* args) {
     vel[2] = -alpha + chassis_yaw_omega_target;
     vel[3] = alpha + chassis_yaw_omega_target;
 
+    // Referee System Regulation: Chassis Power & 60J Buffer Energy Protection (RMUL Rule 3.3.1.4)
+    // If buffer energy falls to 0, referee powers off chassis for 5 seconds.
+    // Throttles velocity output proportionally as buffer energy drops below 30 J.
+    if (referee && referee->connection_flag_) {
+      if (!referee->game_robot_status.power_management_chassis_output) {
+        vel[0] = 0.0f;
+        vel[1] = 0.0f;
+        vel[2] = 0.0f;
+        vel[3] = 0.0f;
+      } else {
+        float buffer_energy = (float)referee->power_heat_data.buffer_energy;
+        if (buffer_energy < 30.0f) {
+          float pwr_scale = clip<float>(buffer_energy / 30.0f, 0.25f, 1.0f);
+          vel[0] *= pwr_scale;
+          vel[1] *= pwr_scale;
+          vel[2] *= pwr_scale;
+          vel[3] *= pwr_scale;
+        }
+      }
+    }
+
     // Flywheel Control:
     // Left flywheel (0x207): -900 rad/s
     // Right flywheel (0x208): +900 rad/s
@@ -624,6 +702,16 @@ void RM_RTOS_Default_Task(const void* args) {
         left_flywheel_pid_.Reset();
         right_flywheel_pid_.Reset();
         print("FLYWHEEL: BRAKING TO REST\r\n");
+      }
+    }
+
+    // Referee System Regulation: If shooter 24V power is cut by referee, brake flywheels
+    if (referee && referee->connection_flag_ &&
+        !referee->game_robot_status.power_management_shooter_output) {
+      if (flywheel_enabled) {
+        flywheel_enabled = false;
+        left_flywheel_pid_.Reset();
+        right_flywheel_pid_.Reset();
       }
     }
 
@@ -674,6 +762,22 @@ void RM_RTOS_Default_Task(const void* args) {
                             dbus->keyboard.bit.F ||
                             dbus->keyboard.bit.E ||
                             dbus->keyboard.bit.R;
+
+    // Referee System Regulation: Barrel Heat Limit & Shooter Power Protection (RMUL Rule 3.3.1.3)
+    // Each 17mm projectile adds 10 heat.
+    // Exceeding limit locks launcher and blinds FPV until heat = 0.
+    // Exceeding limit + 100 permanently locks launcher for the entire round.
+    if (referee && referee->connection_flag_) {
+      uint16_t heat_limit = referee->game_robot_status.shooter_barrel_heat_limit;
+      uint16_t current_heat = referee->power_heat_data.shooter_17mm_barrel_heat;
+      if (heat_limit > 0 && (current_heat + 15 >= heat_limit)) {
+        feeder_requested = false;  // Suppress feeding to avoid overheat penalty
+      }
+      if (!referee->game_robot_status.power_management_shooter_output) {
+        feeder_requested = false;  // 24V shooter power cut by referee
+      }
+    }
+
     float feeder_target_velocity = 0.0f;
     if (feeder_requested) {
       feeder_target_velocity = 160.0f;
@@ -770,6 +874,16 @@ void RM_RTOS_Default_Task(const void* args) {
       float muzzle_deg = RAD2DEG(yaw_motor->GetTheta() - YAW_MOTOR_OFFSET);
       print("[CONN] IMU: %5.1f | Field: %5.1f | Target: %5.1f | MuzzleRel: %5.1f deg | spin: %.1f | out: %d | err: %5.1f\r\n",
             imu_deg, field_deg, target_deg, muzzle_deg, chassis_yaw_omega_target, yaw_output, RAD2DEG(delta_yaw));
+      if (referee && referee->connection_flag_) {
+        print("[REF] HP:%u/%u Heat:%u/%u Buf:%uJ PwrLim:%uW | ShotSpd:%.1fm/s\r\n",
+              referee->game_robot_status.current_HP,
+              referee->game_robot_status.maximum_HP,
+              referee->power_heat_data.shooter_17mm_barrel_heat,
+              referee->game_robot_status.shooter_barrel_heat_limit,
+              referee->power_heat_data.buffer_energy,
+              referee->game_robot_status.chassis_power_limit,
+              referee->shoot_data.initial_speed);
+      }
     }
 
     osDelay(5);

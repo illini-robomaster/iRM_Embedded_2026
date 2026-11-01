@@ -23,7 +23,7 @@
  *
  * Hardware differences from TypeC (main.cc):
  * - Uses FDCAN instead of CAN (hfdcan1)
- * - Print via UART10 (huart10)
+ * - Print via UART7 (huart7, ST-Link VCP)
  * - DBUS via UART5 (huart5)
  * - IMU via SPI2 (hspi2) with BMI088 only (no IST8310/heater)
  * - IMU initialized in imuTask (HAL_Delay in BMI088 ctor needs RTOS running)
@@ -32,6 +32,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <type_traits>
 
 #include "MahonyAHRS.h"
 #include "board_state_can_protocol.h"
@@ -50,9 +51,6 @@
 
 #define IMU_RX_SIGNAL (1 << 0)
 #define REFEREE_RX_SIGNAL (1 << 1)
-
-// Blocking UART prints stall the control loop (motors hold the last command) -> jerks.
-#define EOH_DEBUG_PRINT 0
 
 // Convert radians to degrees and vice versa
 #define RAD2DEG(x) ((x) * 180.0f / M_PI)
@@ -79,6 +77,7 @@ static float accel[3];
 static float temp;
 static float quat[4] = {1.0f, 0.0f, 0.0f, 0.0f};
 static float INS_angle[3] = {0.0f, 0.0f, 0.0f};  // yaw, pitch, roll
+static volatile uint32_t imu_update_ms = 0;
 static volatile bool imu_ready = false;
 
 /**
@@ -127,9 +126,10 @@ void imuTask(void* arg) {
     if (flags & IMU_RX_SIGNAL) {
       bmi088->Read(gyro, accel, &temp);
 
-      float gx_rad = DEG2RAD(gyro[0]);
-      float gy_rad = DEG2RAD(gyro[1]);
-      float gz_rad = DEG2RAD(gyro[2]);
+      // BMI088_GYRO_SEN already converts raw gyro readings to rad/s.
+      float gx_rad = gyro[0];
+      float gy_rad = gyro[1];
+      float gz_rad = gyro[2];
 
       MahonyAHRSupdateIMU(quat, gx_rad, gy_rad, gz_rad,
                           accel[0], accel[1], accel[2]);
@@ -140,6 +140,7 @@ void imuTask(void* arg) {
       INS_angle[2] = atan2f(2.0f * (quat[0] * quat[1] + quat[2] * quat[3]),
                             1.0f - 2.0f * (quat[1] * quat[1] + quat[2] * quat[2]));  // roll
       imu_ready = true;
+      imu_update_ms = HAL_GetTick();
     }
   }
 }
@@ -173,10 +174,12 @@ static RefereeUART* referee_uart = nullptr;
 static uint8_t prev_pmm_gimbal = 0xFF;
 static uint8_t prev_pmm_chassis = 0xFF;
 static uint8_t prev_pmm_shooter = 0xFF;
-// Legacy 0x0202 provides measured chassis power in watts.
-static volatile float measured_chassis_power_w = 0.0f;
-static volatile uint32_t chassis_power_rx_ms = 0;
-static volatile bool chassis_power_received = false;
+// RM2027 0x0202 no longer carries chassis power (those bytes are reserved and read 0),
+// only the buffer energy. The buffer drains whenever the chassis draws more than the
+// referee's limit, so it is what the power governor regulates.
+static volatile uint16_t chassis_buffer_j = 0;
+static volatile uint32_t chassis_buffer_rx_ms = 0;
+static volatile bool chassis_buffer_received = false;
 
 static void OnRefereeRx(int cmd_id, const uint8_t* data, int length) {
   switch (cmd_id) {
@@ -222,16 +225,9 @@ static void OnRefereeRx(int cmd_id, const uint8_t* data, int length) {
     case communication::POWER_HEAT_DATA: {
       if (length != 14 && length != 16) break;
       const auto* s = reinterpret_cast<const communication::power_heat_data_t*>(data);
-      if (std::isfinite(s->chassis_power) && s->chassis_power >= 0.0f) {
-        measured_chassis_power_w = s->chassis_power;
-        chassis_power_rx_ms = HAL_GetTick();
-        chassis_power_received = true;
-      }
-      break;
-    }
-    case communication::GAME_ROBOT_POS: {
-      const auto* s = reinterpret_cast<const communication::game_robot_pos_t*>(data);
-      print("[REF RX 0x0203] POS x=%.2f y=%.2f angle=%.1f\r\n", s->x, s->y, s->angle);
+      chassis_buffer_j = s->buffer_energy;
+      chassis_buffer_rx_ms = HAL_GetTick();
+      chassis_buffer_received = true;
       break;
     }
     case communication::ROBOT_HURT: {
@@ -252,10 +248,10 @@ static void OnRefereeRx(int cmd_id, const uint8_t* data, int length) {
             s->allowance_17mm, s->allowance_42mm, s->remaining_gold_coin, s->allowance_fortress);
       break;
     }
-    default: {
-      print("[REF RX 0x%04X] len=%d\r\n", cmd_id, length);
+    default:
+      // High-rate packets (position, buffs, RFID, ...) are not logged: they would
+      // saturate the shared debug UART.
       break;
-    }
   }
 }
 
@@ -277,16 +273,61 @@ void refereeTask(void* arg) {
   }
 }
 
+void yawTask(void* arg);
+const osThreadAttr_t yawTaskAttribute = {.name = "yawTask",
+                                       .attr_bits = osThreadDetached,
+                                       .cb_mem = nullptr,
+                                       .cb_size = 0,
+                                       .stack_mem = nullptr,
+                                       .stack_size = 512 * 4,
+                                       .priority = (osPriority_t)osPriorityAboveNormal,
+                                       .tz_module = 0,
+                                       .reserved = 0};
+
 void RM_RTOS_Threads_Init(void) {
   imuTaskHandle = osThreadNew(imuTask, nullptr, &imuTaskAttribute);
   refereeTaskHandle = osThreadNew(refereeTask, nullptr, &refereeTaskAttribute);
+  RM_ASSERT_NE(osThreadNew(yawTask, nullptr, &yawTaskAttribute), nullptr,
+               "Cannot create yaw task");
 }
 
 // Global peripherals
 bsp::CAN* can = nullptr;
 control::Motor3508* chassis_motor[4];
-// Compatibility firmware feedback speed / wheel speed; verify before hardware use.
-constexpr float CHASSIS_FEEDBACK_TO_WHEEL_RATIO = 1.0f;
+// Rotor speed / wheel speed, measured 2026-11-01 by turning each rotor an exact
+// number of encoder turns and checking the wheel mark (chassis_turn_count):
+// IDs 1/3/4 (DM3519 x2 and the M3508) are 268:17; ID2's DM3519 is ~7.80:1.
+constexpr float CHASSIS_FEEDBACK_TO_WHEEL_RATIO[4] = {268.0f / 17.0f, 7.80f, 268.0f / 17.0f,
+                                                      268.0f / 17.0f};
+// Array order: ID3, ID2, ID4, ID1. Reverse ID4 in both feedback and command.
+constexpr float CHASSIS_MOTOR_DIRECTION[4] = {1.0f, 1.0f, -1.0f, 1.0f};
+// Wheel-frame load feedforward: sign(w) * static + viscous * w, in current counts.
+// 80% of the free-air fit from chassis_wheel_test with the measured ratios
+// (2026-11-01); the PI trims the rest.
+constexpr float CHASSIS_FF_STATIC[4] = {282.0f, 616.0f, 553.0f, 242.0f};
+constexpr float CHASSIS_FF_VISCOUS[4] = {12.6f, 13.5f, 11.6f, 10.7f};
+constexpr float CHASSIS_FF_STATIC_BAND = 1.0f;  // rad/s over which static fades in
+constexpr float CHASSIS_OUTPUT_LIMIT = 8000.0f;
+
+// Wheel speed PI. The integral only runs once the command ramp has settled, so the
+// lag during acceleration or reversal does not wind it up into an overshoot.
+// Ki is per second so loop-time jitter does not change the integral rate.
+struct ChassisPI {
+  float kp = 200.0f;
+  float ki = 600.0f;
+  float integral = 0.0f;
+  void Reset() { integral = 0.0f; }
+  float Compute(float error, bool integrate, float dt) {
+    if (integrate) integral = clip<float>(integral + ki * error * dt, -4000.0f, 4000.0f);
+    return clip<float>(kp * error + integral, -6000.0f, 6000.0f);
+  }
+};
+
+static float ChassisFeedforward(int i, float wheel_setpoint) {
+  const float static_scale =
+      clip<float>(wheel_setpoint / CHASSIS_FF_STATIC_BAND, -1.0f, 1.0f);
+  return CHASSIS_FF_STATIC[i] * static_scale + CHASSIS_FF_VISCOUS[i] * wheel_setpoint;
+}
 control::Motor4310* gimbal_motor;
 control::Motor6020* yaw_motor;
 control::Motor3508* flywheel_motor[2];
@@ -294,12 +335,103 @@ control::Motor3508* feeder_motor;
 
 remote::DBUS* dbus = nullptr;
 
-const float YAW_MOTOR_OFFSET = 0.762f;  // in rad (calibrated 12 o'clock alignment: 2.857 - 2.094)
+const float YAW_MOTOR_OFFSET = 2.417f;  // provisional forward pose: old offset + measured 94.8 deg
+// GM6020 voltage-mode back-EMF is ~750-900 counts per rad/s (13.33 rpm/V, 24 V at
+// 25000-30000 counts); 550 compensates 60-75% of it.
+constexpr float YAW_BACK_EMF_FF = 550.0f;
+
+// Only yawTask sends 0x1ff: sending yaw alone would zero the shooter slots.
+struct YawCommand {
+  float target = 0.0f;
+  bool enabled = false;
+  bool spin = false;
+  int16_t left = 0;
+  int16_t right = 0;
+  int16_t feeder = 0;
+  uint32_t updated_ms = 0;
+};
+static YawCommand yaw_command;
+static volatile int16_t yaw_last_output = 0;
+
+static void PublishYawCommand(const YawCommand& command) {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  yaw_command = command;
+  __set_PRIMASK(primask);
+}
+
+void yawTask(void* arg) {
+  UNUSED(arg);
+  const uint32_t period = (osKernelGetTickFreq() + 499U) / 500U;
+  uint32_t next_tick = osKernelGetTickCount();
+  uint32_t last_ms = HAL_GetTick();
+  float previous_yaw = 0.0f;
+  float filtered_rate = 0.0f;
+  bool tracking = false;
+  while (true) {
+    YawCommand command;
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    command = yaw_command;
+    __set_PRIMASK(primask);
+    const uint32_t now = HAL_GetTick();
+    const float dt = clip<float>((now - last_ms) * 0.001f, 0.001f, 0.05f);
+    last_ms = now;
+    int16_t output = 0;
+    const bool fresh = now - command.updated_ms <= 100;
+    const bool active = command.enabled && fresh && imu_ready &&
+                        now - imu_update_ms <= 100;
+    if (active) {
+      const float chassis_yaw = INS_angle[0];
+      const float motor_omega = yaw_motor->GetOmega();  // gimbal relative to chassis, rad/s
+      const float measured = chassis_yaw + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
+      if (!tracking) {
+        previous_yaw = chassis_yaw;
+        filtered_rate = 0.0f;
+      }
+      // World yaw rate = chassis rate (from the Mahony-filtered IMU yaw) + the 6020's
+      // own speed feedback. Differentiating the 13-bit encoder angle instead gave
+      // ~0.38 rad/s quantization steps at 500 Hz.
+      const float chassis_rate = atan2f(sinf(chassis_yaw - previous_yaw),
+                                        cosf(chassis_yaw - previous_yaw)) / dt;
+      previous_yaw = chassis_yaw;
+      // Preserve the former alpha=0.2 at 5 ms, independent of task period.
+      const float alpha = 1.0f - expf(-dt / 0.0224071f);
+      filtered_rate += alpha * (chassis_rate + motor_omega - filtered_rate);
+      const float error = atan2f(sinf(command.target - measured),
+                                 cosf(command.target - measured));
+      const float limit = command.spin ? 30000.0f : 28000.0f;
+      // 0x1ff drives the GM6020 in voltage mode: while the chassis turns underneath,
+      // the motor's back-EMF would otherwise have to be supplied by a growing angle
+      // error (lag that varies with spin speed -> sway). Partial compensation from
+      // the measured motor speed keeps some of the motor's natural damping.
+      output = static_cast<int16_t>(clip<float>(22000.0f * error - 1400.0f * filtered_rate +
+                                                    YAW_BACK_EMF_FF * motor_omega,
+                                                -limit, limit));
+    }
+    tracking = active;
+    yaw_last_output = output;
+    if (can != nullptr && yaw_motor != nullptr) {
+      const int16_t currents[4] = {output, fresh ? command.feeder : int16_t{0},
+                                 fresh ? command.left : int16_t{0},
+                                 fresh ? command.right : int16_t{0}};
+      uint8_t data[8] = {};
+      for (int i = 0; i < 4; ++i) {
+        data[2 * i] = static_cast<uint16_t>(currents[i]) >> 8;
+        data[2 * i + 1] = static_cast<uint16_t>(currents[i]) & 0xff;
+      }
+      can->Transmit(0x1ff, data, 8);
+    }
+    next_tick += period;
+    if (static_cast<int32_t>(next_tick - osKernelGetTickCount()) <= 0)
+      next_tick = osKernelGetTickCount() + period;
+    osDelayUntil(next_tick);
+  }
+}
 
 // Kinematic conversion ratio from wheel velocity command (rad/s) to physical chassis rotation rate (rad/s)
 // For 152mm omni wheels (r ≈ 0.076m) and chassis radius R ≈ 0.22m:
 // omega_chassis = (sqrt(2) * r / R) * omega_wheel ≈ 0.46
-const float CHASSIS_SPIN_RATIO = 0.46f;
 
 namespace board_state_can = communication::board_state_can;
 
@@ -478,10 +610,10 @@ void RM_RTOS_Init() {
    *  VEL: velocity mode  */
 
   // Chassis requires DJI-compatible DM3519 firmware and motor IDs 1..4.
-  chassis_motor[0] = new control::Motor3508(can, 0x201);  // front right
-  chassis_motor[1] = new control::Motor3508(can, 0x203);  // back left
-  chassis_motor[2] = new control::Motor3508(can, 0x202);  // back right
-  chassis_motor[3] = new control::Motor3508(can, 0x204);  // front left
+  chassis_motor[0] = new control::Motor3508(can, 0x203);  // front right, DM3519
+  chassis_motor[1] = new control::Motor3508(can, 0x202);  // back left, DM3519
+  chassis_motor[2] = new control::Motor3508(can, 0x204);  // back right, DJI M3508
+  chassis_motor[3] = new control::Motor3508(can, 0x201);  // front left, DM3519
 
   gimbal_motor = new control::Motor4310(can, 0x1c, 0x1d, control::POS_VEL);
 
@@ -507,32 +639,144 @@ void RM_RTOS_Init() {
   // hangs when called before the RTOS scheduler starts
 }
 
+// Last spin's statistics (wheel rad/s, chassis rad/s, buffer J). Kept in D3 SRAM4,
+// which neither startup nor a system reset clears, so a ground test run without the
+// USB cable can still be read back after plugging in resets the board (a power cycle
+// loses it). Plain POD on purpose: no constructor may run at startup and overwrite
+// the kept copy. SpinStats{} zero-initializes.
+struct SpinStats {
+  uint32_t duration_ms;
+  uint32_t samples;
+  float wheel_sum;
+  float max_wheel;
+  float chassis_sum;
+  float max_chassis;
+  float last_imu_yaw;
+  float min_buffer;
+  float min_scale;
+};
+static_assert(std::is_trivial<SpinStats>::value, "SpinStats must stay trivial");
+struct PersistentSpinStats {
+  static constexpr uint32_t MAGIC = 0x5350494e;  // "SPIN"
+  uint32_t magic;
+  SpinStats stats;
+  uint32_t checksum;
+  // The SRAM ECC controller holds back the last incomplete write; a reset loses it.
+  // Writing these afterwards pushes the real data out (measured: without it one
+  // stats word read back corrupted after a reset).
+  volatile uint32_t flush[4];
+  uint32_t Sum() const {
+    uint32_t sum = magic;
+    const auto* words = reinterpret_cast<const uint32_t*>(&stats);
+    for (size_t i = 0; i < sizeof(stats) / sizeof(uint32_t); ++i) sum = sum * 31u + words[i];
+    return sum;
+  }
+  bool Valid() const { return magic == MAGIC && checksum == Sum(); }
+  void Seal() {
+    magic = MAGIC;
+    checksum = Sum();
+    __DSB();
+    for (auto& word : flush) word = 0;
+    __DSB();
+  }
+};
+static PersistentSpinStats persistent_spin_stats __attribute__((section(".RAM_D3")));
+
+// Event log kept across resets (same SRAM4 rules as the spin stats) so a ground test
+// without the USB cable can be reconstructed afterwards.
+enum EventCode : uint16_t {
+  EV_BOOT = 1,         // value: boot count
+  EV_ARM = 2,
+  EV_DISARM = 3,       // value: 1 swl UP, 2 RC link lost, 3 not armed
+  EV_SPIN_START = 4,
+  EV_SPIN_END = 5,     // value: duration in 0.1 s
+  EV_WHEEL_STALE = 6,  // value: bitmask of wheels without fresh feedback (FR BL BR FL)
+  EV_WHEEL_OK = 7,
+  EV_RC_LINK = 8,      // value: 1 up, 0 lost
+};
+struct LoggedEvent {
+  uint32_t ms;
+  uint16_t code;
+  int16_t value;
+};
+struct PersistentEvents {
+  static constexpr uint32_t MAGIC = 0x45564e54;  // "EVNT"
+  static constexpr uint32_t SIZE = 32;
+  uint32_t magic;
+  uint32_t boot_count;
+  uint32_t head;  // total events ever added this log
+  LoggedEvent events[SIZE];
+  uint32_t checksum;
+  volatile uint32_t flush[4];
+  uint32_t Sum() const {
+    uint32_t sum = magic * 31u + boot_count;
+    sum = sum * 31u + head;
+    const auto* words = reinterpret_cast<const uint32_t*>(events);
+    for (size_t i = 0; i < sizeof(events) / sizeof(uint32_t); ++i) sum = sum * 31u + words[i];
+    return sum;
+  }
+  bool Valid() const { return magic == MAGIC && checksum == Sum(); }
+  void Seal() {
+    magic = MAGIC;
+    checksum = Sum();
+    __DSB();
+    for (auto& word : flush) word = 0;
+    __DSB();
+  }
+  void Add(EventCode code, int value) {
+    events[head % SIZE] = {HAL_GetTick(), code, static_cast<int16_t>(value)};
+    ++head;
+    Seal();
+  }
+};
+static_assert(std::is_trivial<PersistentEvents>::value, "PersistentEvents must stay trivial");
+static PersistentEvents persistent_events __attribute__((section(".RAM_D3")));
+
+static const char* EventName(uint16_t code) {
+  switch (code) {
+    case EV_BOOT: return "BOOT";
+    case EV_ARM: return "ARM";
+    case EV_DISARM: return "DISARM";
+    case EV_SPIN_START: return "SPIN+";
+    case EV_SPIN_END: return "SPIN-";
+    case EV_WHEEL_STALE: return "WHEEL_STALE";
+    case EV_WHEEL_OK: return "WHEEL_OK";
+    case EV_RC_LINK: return "RC";
+    default: return "?";
+  }
+}
+
+static void PrintEvents() {
+  const PersistentEvents& log = persistent_events;
+  const uint32_t count = log.head < PersistentEvents::SIZE ? log.head : PersistentEvents::SIZE;
+  print("[EV] boots=%lu events=%lu (oldest first; ms since that boot):\r\n",
+        (unsigned long)log.boot_count, (unsigned long)log.head);
+  for (uint32_t k = log.head - count; k < log.head; ++k) {
+    const LoggedEvent& e = log.events[k % PersistentEvents::SIZE];
+    print("[EV]   %8lu %s %d\r\n", (unsigned long)e.ms, EventName(e.code), e.value);
+  }
+}
+
 void RM_RTOS_Default_Task(const void* args) {
   /* press reset if no response */
   UNUSED(args);
 
   control::Motor4310* gimbal_container[] = {gimbal_motor};
-  control::MotorCANBase* dji_container[] = {yaw_motor, flywheel_motor[0], flywheel_motor[1], feeder_motor};
   control::MotorCANBase* chassis_container[] = {
       chassis_motor[0], chassis_motor[1], chassis_motor[2], chassis_motor[3]};
-  // Provisional bench PI gains and current-count cap, requiring hardware tuning.
-  control::ConstrainedPID chassis_pid[4] = {
-      {100.0f, 0.5f, 0.0f, 500.0f, 3000.0f},
-      {100.0f, 0.5f, 0.0f, 500.0f, 3000.0f},
-      {100.0f, 0.5f, 0.0f, 500.0f, 3000.0f},
-      {100.0f, 0.5f, 0.0f, 500.0f, 3000.0f}};
+  // PI on top of ChassisFeedforward(); gains from the free-air bench test.
+  ChassisPI chassis_pid[4];
   // Standard RoboMaster feeder PID (from main_mc02.cc)
   control::PIDController feeder_pid_(40.0f, 5.0f, 10.0f);
   control::ConstrainedPID left_flywheel_pid_(30.0f, 0.8f, 0.0f, 3000.0f, 16384.0f);
   control::ConstrainedPID right_flywheel_pid_(30.0f, 0.8f, 0.0f, 3000.0f, 16384.0f);
   bool flywheel_enabled = false;
+  float chassis_speed_setpoint[4] = {};
+  float chassis_filtered_setpoint[4] = {};
 
   // Yaw PD gains from connected component version (smooth, robust, zero-windup)
-  const float YAW_KP = 20000.0f;
-  const float YAW_KD = 800.0f;        // per rad/s of measured yaw rate
-  const float YAW_KFF = 1200.0f;      // feedforward counts per rad/s of chassis spin rate
   const float YAW_MAX_LEAD = 1.2f;    // max rad the target may lead the measured yaw (allows full torque up to 24000)
-  const float YAW_RATE_ALPHA = 0.2f;  // low-pass on measured rate
+  const float YAW_SPIN_MAX_LEAD = 2.5f;  // spin-mode bound, kept clear of the +-pi wrap
 
   // Pitch limits: looking towards the motor shaft from outside, clockwise rotation moves gimbal DOWN,
   // counter-clockwise rotation moves gimbal UP. Upwards is MORE NEGATIVE.
@@ -548,16 +792,20 @@ void RM_RTOS_Default_Task(const void* args) {
   for (auto* motor : chassis_motor) motor->SetOutput(0);
   control::MotorCANBase::TransmitOutput(chassis_container, 4);
   osDelay(1000);
+  // Repeat zero-current initialization after the motor controllers have booted.
+  for (auto* motor : chassis_motor) motor->SetOutput(0);
+  control::MotorCANBase::TransmitOutput(chassis_container, 4);
   gimbal_motor->SetZeroPos();
   osDelay(50);
   gimbal_motor->MotorEnable();
   osDelay(100);
+  // Stay unpowered until the operator arms the remote; the enable path re-enables.
+  gimbal_motor->MotorDisable();
 
   bool enabled = false;
+  float spin_speed_smoothed = 0.0f;
+  float spin_view_offset = 0.0f;
   float yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
-  float yaw_feedback = 0.0f;
-  float prev_yaw_measured = yaw_target;
-  float yaw_rate_filtered = 0.0f;
   float gimbal_yaw_measured_in_field_reference = yaw_target;
 
   uint32_t last_ms = HAL_GetTick();
@@ -576,10 +824,47 @@ void RM_RTOS_Default_Task(const void* args) {
   bool last_gimbal_pmm_power = true;
   bool last_chassis_pmm_power = false;
   bool last_shooter_pmm_power = true;
+  bool rc_armed = false;
+  bool last_rc_link = false;
+  float power_scale = 1.0f;
+  uint32_t power_scale_sample_ms = 0;
+  float last_buffer_j = 60.0f;
+  // The current spin is accumulated in spin_stats; it replaces the kept copy only once
+  // it has lasted MIN_KEPT_SPIN_MS, so short taps of the switch do not overwrite a run.
+  constexpr uint32_t MIN_KEPT_SPIN_MS = 3000;
+  SpinStats spin_stats = {};
+  const SpinStats& kept_spin = persistent_spin_stats.stats;
+  const bool spin_stats_restored = persistent_spin_stats.Valid();
+  if (!spin_stats_restored) {
+    persistent_spin_stats.stats = SpinStats{};
+    persistent_spin_stats.Seal();
+  }
+  if (!persistent_events.Valid()) {
+    persistent_events = PersistentEvents{};
+  }
+  ++persistent_events.boot_count;
+  persistent_events.Add(EV_BOOT, static_cast<int>(persistent_events.boot_count));
+  bool last_wheels_fresh = true;
+  bool spin_stats_active = false;
 
   while (true) {
     BoardStateCanMainTaskStep();
-    bool autoaim_requested = (dbus->swr == remote::UP);
+    // DBUS keeps its last frame when the link drops, so a stale frame must not be
+    // read as a command. After boot or a link loss, outputs stay off until the
+    // operator has shown swl == UP on a live link.
+    const bool rc_link = dbus->connection_flag_ && HAL_GetTick() - dbus->timestamp <= 100;
+    if (!rc_link) {
+      rc_armed = false;
+    } else if (dbus->swl == remote::UP) {
+      rc_armed = true;
+    }
+    if (rc_link != last_rc_link) {
+      last_rc_link = rc_link;
+      print(rc_link ? "RC link up (set swl UP to arm)\r\n" : "RC link LOST - outputs off\r\n");
+      persistent_events.Add(EV_RC_LINK, rc_link ? 1 : 0);
+    }
+    const bool rc_active = rc_link && rc_armed;
+    bool autoaim_requested = rc_active && dbus->swr == remote::UP;
     VisionCanMainTaskStep(HAL_GetTick(), autoaim_requested);
 
     float vel[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -600,11 +885,18 @@ void RM_RTOS_Default_Task(const void* args) {
     last_ms = now_ms;
 
     
-    // disable logic: swl == UP shuts down all chassis, gimbal, feeder, and flywheel motors
-    if (dbus->swl == remote::UP) {
+    // disable logic: swl == UP or no armed RC link shuts down all chassis, gimbal,
+    // feeder, and flywheel motors
+    if (!rc_active || dbus->swl == remote::UP) {
+      YawCommand stopped;
+      stopped.updated_ms = HAL_GetTick();
+      PublishYawCommand(stopped);
+      spin_speed_smoothed = 0.0f;
+      spin_view_offset = 0.0f;
       if (enabled) {
         gimbal_motor->MotorDisable();
         print("Disabled \r\n");
+        persistent_events.Add(EV_DISARM, !rc_link ? 2 : (dbus->swl == remote::UP ? 1 : 3));
         enabled = false;
         // Nothing of what happened during the shutdown belongs to the next move.
         dbus->DiscardMouseDelta();
@@ -612,6 +904,8 @@ void RM_RTOS_Default_Task(const void* args) {
       flywheel_enabled = false;
       for (int i = 0; i < 4; ++i) {
         chassis_pid[i].Reset();
+        chassis_speed_setpoint[i] = 0.0f;
+        chassis_filtered_setpoint[i] = 0.0f;
         chassis_motor[i]->SetOutput(0);
       }
       control::MotorCANBase::TransmitOutput(chassis_container, 4);
@@ -620,20 +914,47 @@ void RM_RTOS_Default_Task(const void* args) {
       flywheel_motor[0]->SetOutput(0);
       flywheel_motor[1]->SetOutput(0);
       feeder_motor->SetOutput(0);
-      control::MotorCANBase::TransmitOutput(dji_container, 4);
+      static uint32_t idle_report_ms = 0;
+      if (HAL_GetTick() - idle_report_ms >= 250) {
+        idle_report_ms = HAL_GetTick();
+        print("[IDLE] rc_link=%d armed=%d swl=%d | yaw theta=%.3f omega=%.2f | wheels FR=%d BL=%d BR=%d FL=%d | CAN TEC=%lu REC=%lu LEC=%lu\r\n",
+              rc_link, rc_armed, (int)dbus->swl, yaw_motor->GetTheta(), yaw_motor->GetOmega(),
+              (int)chassis_motor[0]->connection_flag_, (int)chassis_motor[1]->connection_flag_,
+              (int)chassis_motor[2]->connection_flag_, (int)chassis_motor[3]->connection_flag_,
+              (unsigned long)(hfdcan1.Instance->ECR & 0xff),
+              (unsigned long)((hfdcan1.Instance->ECR >> 8) & 0x7f),
+              (unsigned long)(hfdcan1.Instance->PSR & 0x7));
+        const float n = kept_spin.samples ? static_cast<float>(kept_spin.samples) : 1.0f;
+        print("[LAST SPIN >=3s] %.1fs | wheel mean=%.1f max=%.1f rad/s | chassis mean=%.2f max=%.2f rad/s (%.0f rpm) | "
+              "min buffer=%.0fJ min scale=%.2f | ref limit=%uW buffer now=%uJ fresh=%d | %s\r\n",
+              kept_spin.duration_ms / 1000.0f, kept_spin.wheel_sum / n, kept_spin.max_wheel,
+              kept_spin.chassis_sum / n, kept_spin.max_chassis, kept_spin.chassis_sum / n * 9.549f,
+              kept_spin.samples ? kept_spin.min_buffer : 0.0f, kept_spin.min_scale,
+              referee ? referee->game_robot_status.chassis_power_limit : 0, chassis_buffer_j,
+              chassis_buffer_received && HAL_GetTick() - chassis_buffer_rx_ms <= 500,
+              spin_stats_restored ? "kept across reset" : "this boot");
+        static uint32_t events_report_ms = 0;
+        if (HAL_GetTick() - events_report_ms >= 3000) {
+          events_report_ms = HAL_GetTick();
+          PrintEvents();
+        }
+      }
+      if (spin_stats_active) {
+        persistent_events.Add(EV_SPIN_END, static_cast<int>(spin_stats.duration_ms / 100));
+        spin_stats_active = false;
+      }
       osDelay(100);
       continue;
     } else {
       if (!enabled) {
         print("Enabled \r\n");
+        persistent_events.Add(EV_ARM, 0);
         for (auto& pid : chassis_pid) pid.Reset();
         gimbal_motor->MotorEnable();
         float cur_pitch = gimbal_motor->GetTheta();
         gimbal_pos = clip<float>(cur_pitch < GIMBAL_PITCH_MAX ? cur_pitch : GIMBAL_PITCH_MAX,
                                  GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
         yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
-        prev_yaw_measured = yaw_target;
-        yaw_rate_filtered = 0.0f;
         osDelay(100);
         // Drop the arm-up window: everything that arrived while the motors were being
         // enabled is cleared here, and the displacement taken at the top of this
@@ -682,8 +1003,6 @@ void RM_RTOS_Default_Task(const void* args) {
           gimbal_pos = clip<float>(cur_pitch < GIMBAL_PITCH_MAX ? cur_pitch : GIMBAL_PITCH_MAX,
                                    GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
           yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
-          prev_yaw_measured = yaw_target;
-          yaw_rate_filtered = 0.0f;
         }
       }
     }
@@ -703,11 +1022,25 @@ void RM_RTOS_Default_Task(const void* args) {
       }
     }
 
-    // Auto-spin logic on swr == DOWN
-    // Higher spin speed of 9.0 rad/s
-    // (Remote wheel dial is broken / ignored).
-    const float AUTO_SPIN_SPEED = 15.0f;
-    float auto_yaw_omega = (dbus->swr == remote::DOWN) ? AUTO_SPIN_SPEED : 0.0f;
+    // Auto-spin on swr == DOWN (remote wheel dial is broken / ignored).
+    // With live referee buffer data the spin asks for the wheel-speed cap and the power
+    // governor below holds the chassis at the referee's limit; without it (bench, no
+    // referee) nothing bounds the power, so spin stays at a moderate speed.
+    const bool buffer_fresh =
+        chassis_buffer_received && HAL_GetTick() - chassis_buffer_rx_ms <= 500;
+    constexpr float SPIN_WHEEL_LIMIT = 40.0f;
+    const float AUTO_SPIN_SPEED = buffer_fresh ? SPIN_WHEEL_LIMIT : 20.0f;  // wheel rad/s
+    const bool spin_requested = dbus->swr == remote::DOWN;
+    // Fixed-rate spin entry/release (wheel rad/s^2) and incremental view-offset changes.
+    const float spin_goal = spin_requested ? AUTO_SPIN_SPEED : 0.0f;
+    const float spin_step = (spin_requested ? 40.0f : 120.0f) * dt;
+    spin_speed_smoothed += clip<float>(spin_goal - spin_speed_smoothed, -spin_step, spin_step);
+    const float view_goal = spin_requested ? DEG2RAD(15.0f) : 0.0f;
+    const float view_step = DEG2RAD(125.0f) * dt;  // full 15-degree offset in 0.12 s
+    const float view_delta = clip<float>(view_goal - spin_view_offset, -view_step, view_step);
+    spin_view_offset += view_delta;
+    yaw_target += view_delta;
+    float auto_yaw_omega = spin_speed_smoothed;
     float chassis_yaw_omega_target = auto_yaw_omega;
 
     // Field-reference gimbal yaw (from connected component version)
@@ -715,7 +1048,7 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // Keyboard linear translation (WASD) with optional Shift boost:
     // W/S: forward/backward, A/D: strafe left/right (in field/gimbal reference frame)
-    float kb_speed = dbus->keyboard.bit.SHIFT ? 25.0f : 10.0f;
+    float kb_speed = dbus->keyboard.bit.SHIFT ? 40.0f : 20.0f;
     float kb_y = 0.0f;
     float kb_x = 0.0f;
     if (dbus->keyboard.bit.W) kb_y += kb_speed;
@@ -725,12 +1058,19 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // Right stick vertical (ch1) is forward/back (y); right stick horizontal (ch0) is strafe (x).
     // Unified with keyboard WASD so both inputs move along the exact same axes.
-    float stick_y = clip<float>(dbus->ch1 / 660.0f * 30.0f, -30.0f, 30.0f);
-    float stick_x = clip<float>(dbus->ch0 / 660.0f * 30.0f, -30.0f, 30.0f);
+    // Remove center drift and rescale the remaining travel continuously.
+    const auto translation_stick = [](int raw) {
+      constexpr int deadband = 30;
+      if (raw >= -deadband && raw <= deadband) return 0.0f;
+      const float magnitude = clip<float>((abs(raw) - deadband) / 630.0f, 0.0f, 1.0f);
+      return (raw < 0 ? -1.0f : 1.0f) * magnitude * 40.0f;
+    };
+    float stick_y = translation_stick(dbus->ch1);
+    float stick_x = translation_stick(dbus->ch0);
     float y = stick_y + kb_y;
     float x = stick_x + kb_x;
-    y = clip<float>(y, -30.0f, 30.0f);
-    x = clip<float>(x, -30.0f, 30.0f);
+    y = clip<float>(y, -40.0f, 40.0f);
+    x = clip<float>(x, -40.0f, 40.0f);
 
     // Deadband on ch2 to prevent transmitter stick center drift from nudging yaw CCW
     int16_t ch2_raw = dbus->ch2;
@@ -789,9 +1129,8 @@ void RM_RTOS_Default_Task(const void* args) {
       gimbal_pos = clip<float>(gimbal_pos, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
     }
 
-    // Apply constant velocity in opposite direction of chassis spin at the same speed as chassis rotation
-    float chassis_spin_rate = CHASSIS_SPIN_RATIO * chassis_yaw_omega_target;
-    yaw_target += chassis_spin_rate * dt;
+    // World yaw target changes only from operator/autoaim input, never chassis spin.
+    yaw_target = atan2f(sinf(yaw_target), cosf(yaw_target));
 
     float delta_yaw = yaw_target - gimbal_yaw_measured_in_field_reference;
     float cos = cosf(delta_yaw);
@@ -800,37 +1139,32 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // Anti-windup: don't let the target run away from the measured heading when the
     // stick is held (otherwise the error saturates and flips sign at +-pi -> violent snap)
-    if (fabsf(delta_yaw) > YAW_MAX_LEAD) {
+    if (!spin_requested && fabsf(delta_yaw) > YAW_MAX_LEAD) {
       delta_yaw = copysignf(YAW_MAX_LEAD, delta_yaw);
+      if (fabsf(yaw_omega) > 0.001f || fabsf(mouse_step.yaw) > 0.00001f || autoaim_requested)
+        yaw_target = gimbal_yaw_measured_in_field_reference + delta_yaw;
+    } else if (spin_requested && fabsf(delta_yaw) > YAW_SPIN_MAX_LEAD) {
+      // While spinning the world target is held, but if the gimbal ever lags this far
+      // the yaw task's wrapped error would flip sign at +-pi; pull the target back.
+      delta_yaw = copysignf(YAW_SPIN_MAX_LEAD, delta_yaw);
       yaw_target = gimbal_yaw_measured_in_field_reference + delta_yaw;
     }
 
-    // PD with derivative on the (filtered) measurement relative to commanded spin rate:
-    // Prevents the D-term from resisting steady-state chassis rotation while damping oscillations.
-    float meas_diff = atan2f(sinf(gimbal_yaw_measured_in_field_reference - prev_yaw_measured),
-                             cosf(gimbal_yaw_measured_in_field_reference - prev_yaw_measured));
-    prev_yaw_measured = gimbal_yaw_measured_in_field_reference;
-    yaw_rate_filtered += YAW_RATE_ALPHA * (meas_diff / dt - yaw_rate_filtered);
-    float rate_error = yaw_rate_filtered - chassis_spin_rate;
-    yaw_feedback = YAW_KP * delta_yaw - YAW_KD * rate_error;
-
-    // Velocity feedforward overcomes GM6020 back-EMF and bearing drag during high-speed chassis spin
-    float yaw_ff = YAW_KFF * chassis_spin_rate;
-    float yaw_output_f = clip<float>(yaw_ff + yaw_feedback, -28000.0f, 28000.0f);
-    int16_t yaw_output = (int16_t)clip<float>(yaw_output_f, -30000.0f, 30000.0f);
+    // Feedback and 0x1ff transmission run independently in the 500 Hz yaw task.
+    const int16_t yaw_output = yaw_last_output;
 
     // If gimbal power is cut on PMM, software disable yaw output and hold tracking
-    if (!gimbal_pmm_power) {
-      yaw_output = 0;
+    if (!gimbal_pmm_power || !imu_ready || HAL_GetTick() - imu_update_ms > 100) {
       yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
-      prev_yaw_measured = yaw_target;
-      yaw_rate_filtered = 0.0f;
       float cur_pitch = gimbal_motor->GetTheta();
       gimbal_pos = clip<float>(cur_pitch < GIMBAL_PITCH_MAX ? cur_pitch : GIMBAL_PITCH_MAX,
                                GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
     }
 
-    float chasis_yaw_measured_in_field_reference = gimbal_yaw_measured_in_field_reference - INS_angle[0];  // in rad
+    // Preserve gimbal-relative control; compensate the chassis orientation by 90 degrees.
+    const float chassis_direction_offset = -M_PI / 2.0f;
+    float chasis_yaw_measured_in_field_reference =
+        gimbal_yaw_measured_in_field_reference - INS_angle[0] + chassis_direction_offset;
     float cos_yaw = cosf(chasis_yaw_measured_in_field_reference);
     float sin_yaw = sinf(chasis_yaw_measured_in_field_reference);
     float chassis_x = x * cos_yaw - y * sin_yaw;
@@ -838,18 +1172,26 @@ void RM_RTOS_Default_Task(const void* args) {
     x = chassis_x;
     y = chassis_y;
 
-    // alpha, beta equals to x y rotated by -45 degrees
+    // Original 45-degree wheel-speed decomposition.
     float alpha = (x - y) / 1.4142f;
     float beta = (y + x) / 1.4142f;
 
+    // Wheel-speed cap while spinning (the power governor bounds the actual speed) and
+    // 40 rad/s otherwise. A 40 cap measured ~13.4 rad/s mean chassis spin at 120 W.
+    const float wheel_limit = spin_requested ? SPIN_WHEEL_LIMIT : 40.0f;
+
     // Limit omega to available chassis motor headroom while translating
-    float max_omega = abs(30.0f - max(fabsf(alpha), fabsf(beta)));
+    float max_omega = max(0.0f, wheel_limit - max(fabsf(alpha), fabsf(beta)));
     chassis_yaw_omega_target = clip<float>(chassis_yaw_omega_target, -max_omega, max_omega);
 
     vel[0] = -beta + chassis_yaw_omega_target;
     vel[1] = beta + chassis_yaw_omega_target;
     vel[2] = -alpha + chassis_yaw_omega_target;
     vel[3] = alpha + chassis_yaw_omega_target;
+    // Preserve the translation/spin mix while bounding every wheel to wheel_limit.
+    float peak_wheel_speed = wheel_limit;
+    for (float speed : vel) peak_wheel_speed = max(peak_wheel_speed, fabsf(speed));
+    for (float& speed : vel) speed *= wheel_limit / peak_wheel_speed;
 
     // Stop chassis commands when referee PMM chassis power is off.
     if (!chassis_pmm_power) {
@@ -857,19 +1199,80 @@ void RM_RTOS_Default_Task(const void* args) {
       vel[1] = 0.0f;
       vel[2] = 0.0f;
       vel[3] = 0.0f;
-    } else if (chassis_power_received && HAL_GetTick() - chassis_power_rx_ms <= 500) {
-      // Velocity-mode feedback limiting; not a hard instantaneous electrical power cap.
-      constexpr float CHASSIS_POWER_LIMIT_W = 120.0f;
-      const float power_w = measured_chassis_power_w;
-      if (power_w > CHASSIS_POWER_LIMIT_W) {
-        const float scale = CHASSIS_POWER_LIMIT_W / power_w;
-        for (float& wheel_velocity : vel) wheel_velocity *= scale;
+    } else if (buffer_fresh) {
+      // Power governor on the referee buffer energy (~10 Hz). The buffer only drains
+      // while the chassis is over the referee's limit, so holding it near
+      // BUFFER_TARGET_J keeps the average power at that limit, whatever its value.
+      // A full buffer means there is headroom: probe the speed scale back up.
+      constexpr float BUFFER_TARGET_J = 35.0f;
+      constexpr float BUFFER_FULL_J = 55.0f;
+      const uint32_t sample_ms = chassis_buffer_rx_ms;
+      if (sample_ms != power_scale_sample_ms) {
+        power_scale_sample_ms = sample_ms;
+        const float buffer = chassis_buffer_j;
+        const float drop = last_buffer_j - buffer;  // J per ~100 ms sample
+        last_buffer_j = buffer;
+        if (drop > 3.0f && buffer < BUFFER_FULL_J + 5.0f) {
+          // Draining fast (well over the limit): cut before the buffer is half gone.
+          power_scale *= max(0.75f, 1.0f - 0.03f * drop);
+        } else if (buffer < BUFFER_TARGET_J) {
+          // Deeper below target -> stronger cut, at most 30% per sample.
+          power_scale *= max(0.7f, 1.0f - 0.02f * (BUFFER_TARGET_J - buffer));
+        } else if (buffer >= BUFFER_FULL_J) {
+          power_scale += 0.05f;
+        } else {
+          power_scale += 0.01f;
+        }
+        if (buffer < 10.0f) power_scale = min(power_scale, 0.3f);
+        power_scale = clip<float>(power_scale, 0.15f, 1.0f);
       }
+      for (float& wheel_velocity : vel) wheel_velocity *= power_scale;
+    } else {
+      power_scale = 1.0f;
+    }
+
+    // Spin statistics, printed in [IDLE] so a test run without the USB cable can be
+    // read back afterwards.
+    if (spin_requested && enabled) {
+      if (!spin_stats_active) {
+        spin_stats_active = true;
+        spin_stats = SpinStats{};
+        spin_stats.min_buffer = 255.0f;
+        spin_stats.min_scale = 1.0f;
+        spin_stats.last_imu_yaw = INS_angle[0];
+        persistent_events.Add(EV_SPIN_START, 0);
+      }
+      float wheel_sum = 0.0f;
+      for (int i = 0; i < 4; ++i)
+        wheel_sum += fabsf(chassis_motor[i]->GetOmega()) / CHASSIS_FEEDBACK_TO_WHEEL_RATIO[i];
+      const float wheel_mean = wheel_sum / 4.0f;
+      // Chassis spin rate from the IMU yaw (the IMU is on the chassis).
+      const float chassis_rate =
+          fabsf(atan2f(sinf(INS_angle[0] - spin_stats.last_imu_yaw),
+                       cosf(INS_angle[0] - spin_stats.last_imu_yaw))) / dt;
+      spin_stats.last_imu_yaw = INS_angle[0];
+      if (spin_stats.samples > 0) {
+        spin_stats.max_wheel = max(spin_stats.max_wheel, wheel_mean);
+        spin_stats.max_chassis = max(spin_stats.max_chassis, chassis_rate);
+      }
+      spin_stats.wheel_sum += wheel_mean;
+      spin_stats.chassis_sum += chassis_rate;
+      spin_stats.samples++;
+      if (buffer_fresh) spin_stats.min_buffer = min(spin_stats.min_buffer, (float)chassis_buffer_j);
+      spin_stats.min_scale = min(spin_stats.min_scale, power_scale);
+      spin_stats.duration_ms += static_cast<uint32_t>(dt * 1000.0f + 0.5f);
+      if (spin_stats.duration_ms >= MIN_KEPT_SPIN_MS) {
+        persistent_spin_stats.stats = spin_stats;
+        persistent_spin_stats.Seal();
+      }
+    } else if (spin_stats_active) {
+      persistent_events.Add(EV_SPIN_END, static_cast<int>(spin_stats.duration_ms / 100));
+      spin_stats_active = false;
     }
 
     // Flywheel Control:
-    // Left flywheel (0x207): -900 rad/s
-    // Right flywheel (0x208): +900 rad/s
+    // Left flywheel (0x207): -750 rad/s
+    // Right flywheel (0x208): +750 rad/s
     // swl == DOWN enables flywheels (provided shooter PMM power is active);
     // swl != DOWN or shooter PMM power cut disables them and applies smooth viscous braking
     const float FLYWHEEL_TARGET_SPEED = 750.0f;
@@ -895,7 +1298,7 @@ void RM_RTOS_Default_Task(const void* args) {
     float right_omega = flywheel_motor[1]->GetOmega();
 
     if (flywheel_enabled) {
-      // Steady running at -900 and +900 rad/s with anti-windup PI (Kd=0 prevents torque ripple & yaw gyro jitter)
+      // Steady running at -750 and +750 rad/s with anti-windup PI (Kd=0 prevents torque ripple & yaw gyro jitter)
       float left_diff = -FLYWHEEL_TARGET_SPEED - left_omega;
       float right_diff = FLYWHEEL_TARGET_SPEED - right_omega;
       left_flywheel_output = left_flywheel_pid_.ComputeConstrainedOutput(left_diff);
@@ -936,6 +1339,7 @@ void RM_RTOS_Default_Task(const void* args) {
     // - At omega=0, delivers 3100 counts breakaway kick immediately.
     // - In steady state, locks right onto 80 rad/s with ~1100 counts.
     // Feeder triggered by Mouse Left Click or Keyboard F / E / R
+    // Dial firing disabled until actual center/direction is measured on this DT7.
     bool feeder_requested = dbus->mouse.l ||
                             dbus->keyboard.bit.F ||
                             dbus->keyboard.bit.E ||
@@ -1028,18 +1432,58 @@ void RM_RTOS_Default_Task(const void* args) {
 
     // A missing wheel feedback stops the whole chassis, not just that wheel.
     bool chassis_feedback_fresh = true;
+    int stale_mask = 0;
     const uint32_t feedback_now = HAL_GetTick();
-    for (auto* motor : chassis_motor) {
-      chassis_feedback_fresh &= motor->connection_flag_ &&
-          feedback_now - motor->GetLastFeedbackMs() <= 100;
+    for (int i = 0; i < 4; ++i) {
+      const bool fresh = chassis_motor[i]->connection_flag_ &&
+          feedback_now - chassis_motor[i]->GetLastFeedbackMs() <= 100;
+      chassis_feedback_fresh &= fresh;
+      if (!fresh) stale_mask |= 1 << i;
     }
+    if (chassis_feedback_fresh != last_wheels_fresh) {
+      last_wheels_fresh = chassis_feedback_fresh;
+      persistent_events.Add(chassis_feedback_fresh ? EV_WHEEL_OK : EV_WHEEL_STALE, stale_mask);
+    }
+    float log_wheel_omega[4] = {};
+    float log_wheel_output[4] = {};
     for (int i = 0; i < 4; ++i) {
       if (!chassis_pmm_power || !chassis_feedback_fresh) {
         chassis_pid[i].Reset();
+        chassis_speed_setpoint[i] = 0.0f;
+        chassis_filtered_setpoint[i] = 0.0f;
         chassis_motor[i]->SetOutput(0);
       } else {
-        const float wheel_omega = chassis_motor[i]->GetOmega() / CHASSIS_FEEDBACK_TO_WHEEL_RATIO;
-        chassis_motor[i]->SetOutput(chassis_pid[i].ComputeConstrainedOutput(vel[i] - wheel_omega));
+        // Short command ramp: full-speed release reaches zero in ~133 ms.
+        // Reversal first brakes through zero; emergency disable bypasses this ramp.
+        const float previous = chassis_speed_setpoint[i];
+        const bool reversing = previous * vel[i] < 0.0f;
+        const float target = reversing ? 0.0f : vel[i];
+        const bool slowing = reversing || fabsf(target) < fabsf(previous);
+        const float step = (slowing ? 300.0f : 200.0f) * dt;
+        chassis_speed_setpoint[i] += clip<float>(target - previous, -step, step);
+        // DM3519 IDs 3/2/1: first-order target filter with a 10 ms time constant.
+        // Index 2 is the DJI M3508 (ID4), which keeps its existing target response.
+        if (i != 2) {
+          const float filter_alpha = 1.0f - expf(-dt / 0.01f);
+          chassis_filtered_setpoint[i] += filter_alpha *
+              (chassis_speed_setpoint[i] - chassis_filtered_setpoint[i]);
+          if (fabsf(target) < 0.1f && fabsf(chassis_filtered_setpoint[i]) < 0.1f)
+            chassis_filtered_setpoint[i] = 0.0f;
+        } else {
+          chassis_filtered_setpoint[i] = chassis_speed_setpoint[i];
+        }
+        if (fabsf(chassis_filtered_setpoint[i]) < 0.1f && fabsf(target) < 0.1f)
+          chassis_pid[i].Reset();
+        const float wheel_omega = CHASSIS_MOTOR_DIRECTION[i] * chassis_motor[i]->GetOmega() /
+                                  CHASSIS_FEEDBACK_TO_WHEEL_RATIO[i];
+        const float output = clip<float>(
+            ChassisFeedforward(i, chassis_filtered_setpoint[i]) +
+                chassis_pid[i].Compute(chassis_filtered_setpoint[i] - wheel_omega,
+                                       fabsf(target - chassis_filtered_setpoint[i]) < 0.5f, dt),
+            -CHASSIS_OUTPUT_LIMIT, CHASSIS_OUTPUT_LIMIT);
+        chassis_motor[i]->SetOutput(static_cast<int16_t>(CHASSIS_MOTOR_DIRECTION[i] * output));
+        log_wheel_omega[i] = wheel_omega;
+        log_wheel_output[i] = output;
       }
     }
     // DM4310 in POS_VEL mode: 2nd argument is velocity limit (rad/s) for profile position tracking.
@@ -1049,12 +1493,35 @@ void RM_RTOS_Default_Task(const void* args) {
     flywheel_motor[0]->SetOutput(left_flywheel_output);
     flywheel_motor[1]->SetOutput(right_flywheel_output);
     feeder_motor->SetOutput(feeder_output);
-    yaw_motor->SetOutput(yaw_output);
+    YawCommand command;
+    command.target = yaw_target;
+    command.enabled = enabled && gimbal_pmm_power;
+    command.spin = spin_requested;
+    // Match Motor3508::SetOutput's current clamp when packing the shared frame.
+    command.left = clip<int16_t>(left_flywheel_output, -14690, 14690);
+    command.right = clip<int16_t>(right_flywheel_output, -14690, 14690);
+    command.feeder = clip<int16_t>(feeder_output, -14690, 14690);
+    command.updated_ms = HAL_GetTick();
+    PublishYawCommand(command);
     control::MotorCANBase::TransmitOutput(chassis_container, 4);
     if (gimbal_pmm_power) {
       control::Motor4310::TransmitOutput(gimbal_container, 1);
     }
-    control::MotorCANBase::TransmitOutput(dji_container, 4);
+
+    // 20 Hz chassis/yaw log for ground tests, wheel order FR(ID3) BL(ID2) BR(ID4) FL(ID1):
+    // setpoint/measured/output per wheel (wheel rad/s, counts), then yaw error (deg),
+    // yaw output (counts) and 6020 speed relative to the chassis (rad/s).
+    static uint32_t chassis_log_ms = 0;
+    if (now_ms - chassis_log_ms >= 50) {
+      chassis_log_ms = now_ms;
+      print("[CH] %lu spin=%d | %.1f %.1f %d | %.1f %.1f %d | %.1f %.1f %d | %.1f %.1f %d | yaw %.1f %d %.2f\r\n",
+            (unsigned long)now_ms, spin_requested,
+            chassis_filtered_setpoint[0], log_wheel_omega[0], (int)log_wheel_output[0],
+            chassis_filtered_setpoint[1], log_wheel_omega[1], (int)log_wheel_output[1],
+            chassis_filtered_setpoint[2], log_wheel_omega[2], (int)log_wheel_output[2],
+            chassis_filtered_setpoint[3], log_wheel_omega[3], (int)log_wheel_output[3],
+            RAD2DEG(delta_yaw), (int)yaw_last_output, yaw_motor->GetOmega());
+    }
 
     // Throttled debug print every 500ms for heading and gimbal alignment verification
     if (++print_count >= 100) {
@@ -1065,7 +1532,13 @@ void RM_RTOS_Default_Task(const void* args) {
       float muzzle_deg = RAD2DEG(yaw_motor->GetTheta() - YAW_MOTOR_OFFSET);
       print("[CONN] IMU: %5.1f | Field: %5.1f | Target: %5.1f | MuzzleRel: %5.1f deg | Pitch: %5.2f rad (%4.1f deg) | out: %d | err: %5.1f\r\n",
             imu_deg, field_deg, target_deg, muzzle_deg, gimbal_pos, RAD2DEG(gimbal_pos), yaw_output, RAD2DEG(delta_yaw));
-      print("[CHASSIS] M0(0x201): conn=%d w=%.2f | M1(0x203): conn=%d w=%.2f | M2(0x202): conn=%d w=%.2f | M3(0x204): conn=%d w=%.2f\r\n",
+      const uint32_t buffer_age = HAL_GetTick() - chassis_buffer_rx_ms;
+      print("[SPIN POWER] spin=%d buffer=%uJ fresh=%d age=%lums scale=%.2f | CAN TEC=%lu REC=%lu LEC=%lu\r\n",
+            spin_requested, chassis_buffer_j, buffer_fresh, (unsigned long)buffer_age, power_scale,
+            (unsigned long)(hfdcan1.Instance->ECR & 0xff),
+            (unsigned long)((hfdcan1.Instance->ECR >> 8) & 0x7f),
+            (unsigned long)(hfdcan1.Instance->PSR & 0x7));
+      print("[CHASSIS] M0(0x203): conn=%d w=%.2f | M1(0x202): conn=%d w=%.2f | M2(0x204): conn=%d w=%.2f | M3(0x201): conn=%d w=%.2f\r\n",
             (int)chassis_motor[0]->connection_flag_, chassis_motor[0]->GetOmega(),
             (int)chassis_motor[1]->connection_flag_, chassis_motor[1]->GetOmega(),
             (int)chassis_motor[2]->connection_flag_, chassis_motor[2]->GetOmega(),

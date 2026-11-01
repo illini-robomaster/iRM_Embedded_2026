@@ -146,6 +146,17 @@ SECTIONS
     _eram_d2 = .;
   } >RAM_D2
 
+  /* D3 SRAM4 section, not initialized at startup. Unlike D2 SRAM (cleared by a
+   * system reset on this part, measured 2026-11-01), SRAM4 keeps its contents
+   * across a reset, so data placed here survives one (not a power cycle). */
+  .RAM_D3 (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.RAM_D3)
+    *(.RAM_D3*)
+    . = ALIGN(4);
+  } >RAM_D3
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   /* CRITICAL: Must be in DMA-accessible RAM (AXI SRAM) for STM32H7 */
   ._user_heap_stack :

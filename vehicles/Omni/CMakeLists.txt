@@ -20,6 +20,18 @@
 
 project(vehicle_omni ASM C CXX)
 
+irm_add_arm_executable(dm3519_201_diag
+    TARGET DM_MC_02
+    SOURCES dm3519_201_diag.cc)
+
+irm_add_arm_executable(chassis_turn_count
+    TARGET DM_MC_02
+    SOURCES chassis_turn_count.cc)
+
+irm_add_arm_executable(chassis_wheel_test
+    TARGET DM_MC_02
+    SOURCES chassis_wheel_test.cc)
+
 irm_add_arm_executable(${PROJECT_NAME}
     TARGET DJI_Board_TypeC
     SOURCES main.cc)

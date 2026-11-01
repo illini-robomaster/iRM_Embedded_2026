@@ -135,45 +135,51 @@ namespace bsp {
             .MessageMarker = 0,
         };
 
-        if (HAL_FDCAN_AddMessageToTxFifoQ(hfdcan_, &header, (uint8_t*)data) != HAL_OK)
+        // Multiple control tasks share this FIFO. Keep slot selection and enqueue
+        // atomic so a higher-priority sender cannot overwrite an in-flight slot.
+        const uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        const HAL_StatusTypeDef status =
+            HAL_FDCAN_AddMessageToTxFifoQ(hfdcan_, &header, (uint8_t*)data);
+        __set_PRIMASK(primask);
+        if (status != HAL_OK)
             return -1;
 
         return length;
     }
 
     void FDCAN::RxCallback() {
-        FDCAN_RxHeaderTypeDef header;
-        memset(&header, 0, sizeof(header));
-        uint8_t data[MAX_FDCAN_DATA_SIZE];
-        memset(data, 0xAA, sizeof(data));  // Initialize with 0xAA pattern
-
-        // Check if there's actually a message in FIFO0
+        // One new-message interrupt can stand for several queued frames, so drain
+        // everything present; reading one frame per interrupt lets the FIFO back up.
         uint32_t fill_level = HAL_FDCAN_GetRxFifoFillLevel(hfdcan_, FDCAN_RX_FIFO0);
         fdcan_debug_fill_level = fill_level;
-        if (fill_level == 0)
-          return;
 
-        HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(hfdcan_, FDCAN_RX_FIFO0, &header, data);
-        fdcan_debug_hal_status = status;
-        fdcan_debug_identifier = header.Identifier;
-        fdcan_debug_dlc = header.DataLength;
-        for (int i = 0; i < 8; i++) {
-          fdcan_debug_data[i] = data[i];
+        for (; fill_level > 0; --fill_level) {
+            FDCAN_RxHeaderTypeDef header;
+            memset(&header, 0, sizeof(header));
+            uint8_t data[MAX_FDCAN_DATA_SIZE];
+            memset(data, 0xAA, sizeof(data));  // Initialize with 0xAA pattern
+
+            HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(hfdcan_, FDCAN_RX_FIFO0, &header, data);
+            fdcan_debug_hal_status = status;
+            fdcan_debug_identifier = header.Identifier;
+            fdcan_debug_dlc = header.DataLength;
+            for (int i = 0; i < 8; i++) {
+              fdcan_debug_data[i] = data[i];
+            }
+
+            if (status != HAL_OK)
+              return;
+
+            const auto it = id_to_index_.find(static_cast<uint16_t>(header.Identifier));
+            if (it == id_to_index_.end())
+                continue;
+
+            // Find corresponding callback
+            const uint8_t callback_index = it->second;
+            if (rx_callbacks_[callback_index])
+                rx_callbacks_[callback_index](data, rx_args_[callback_index]);
         }
-
-        if (status != HAL_OK)
-          return;
-            
-        uint16_t callback_id = header.Identifier;
-        const auto it = id_to_index_.find(callback_id);
-        if (it == id_to_index_.end())
-            return;
-            
-        callback_id = it->second;
-        
-        // Find corresponding callback
-        if (rx_callbacks_[callback_id])
-            rx_callbacks_[callback_id](data, rx_args_[callback_id]);
     }
 
     void FDCAN::ConfigureFilter(uint32_t filter_id) {

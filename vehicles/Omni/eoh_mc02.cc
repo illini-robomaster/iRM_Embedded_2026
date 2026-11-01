@@ -805,8 +805,6 @@ void RM_RTOS_Default_Task(const void* args) {
   bool enabled = false;
   float spin_speed_smoothed = 0.0f;
   float spin_view_offset = 0.0f;
-  bool keyboard_spin = false;  // toggled by R while swr DOWN, cleared otherwise
-  bool last_key_r = false;
   float yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
   float gimbal_yaw_measured_in_field_reference = yaw_target;
 
@@ -895,8 +893,6 @@ void RM_RTOS_Default_Task(const void* args) {
       PublishYawCommand(stopped);
       spin_speed_smoothed = 0.0f;
       spin_view_offset = 0.0f;
-      keyboard_spin = false;
-      last_key_r = dbus->keyboard.bit.R;
       if (enabled) {
         gimbal_motor->MotorDisable();
         print("Disabled \r\n");
@@ -1026,7 +1022,7 @@ void RM_RTOS_Default_Task(const void* args) {
       }
     }
 
-    // Auto-spin toggled by keyboard R while swr == DOWN (remote wheel dial is broken / ignored).
+    // Auto-spin while keyboard R is held with swr == DOWN (remote wheel dial is broken / ignored).
     // With live referee buffer data the spin asks for the wheel-speed cap and the power
     // governor below holds the chassis at the referee's limit; without it (bench, no
     // referee) nothing bounds the power, so spin stays at a moderate speed.
@@ -1034,17 +1030,16 @@ void RM_RTOS_Default_Task(const void* args) {
         chassis_buffer_received && HAL_GetTick() - chassis_buffer_rx_ms <= 500;
     constexpr float SPIN_WHEEL_LIMIT = 40.0f;
     const float AUTO_SPIN_SPEED = buffer_fresh ? SPIN_WHEEL_LIMIT : 20.0f;  // wheel rad/s
-    // swr DOWN only arms the R toggle; leaving DOWN stops spin and clears the toggle.
-    const bool key_r = dbus->keyboard.bit.R;
-    if (dbus->swr != remote::DOWN) keyboard_spin = false;
-    else if (key_r && !last_key_r) keyboard_spin = !keyboard_spin;
-    last_key_r = key_r;
-    const bool spin_requested = keyboard_spin;
+    // Spin while R is held with swr DOWN; releasing either coasts down at the release rate.
+    const bool spin_requested = dbus->swr == remote::DOWN && dbus->keyboard.bit.R;
     // Fixed-rate spin entry/release (wheel rad/s^2) and incremental view-offset changes.
     const float spin_goal = spin_requested ? AUTO_SPIN_SPEED : 0.0f;
-    const float spin_step = (spin_requested ? 40.0f : 120.0f) * dt;
+    const float spin_step = (spin_requested ? 40.0f : 80.0f) * dt;  // release: 40 -> 0 in 0.5 s
     spin_speed_smoothed += clip<float>(spin_goal - spin_speed_smoothed, -spin_step, spin_step);
-    const float view_goal = spin_requested ? DEG2RAD(15.0f) : 0.0f;
+    // The offset stays while the coast-down is above half spin speed, so a quick R
+    // re-press does not shift the view again; it is removed once the spin has mostly died.
+    const bool keep_view_offset = spin_requested || spin_speed_smoothed > 0.5f * AUTO_SPIN_SPEED;
+    const float view_goal = keep_view_offset ? DEG2RAD(15.0f) : 0.0f;
     const float view_step = DEG2RAD(125.0f) * dt;  // full 15-degree offset in 0.12 s
     const float view_delta = clip<float>(view_goal - spin_view_offset, -view_step, view_step);
     spin_view_offset += view_delta;

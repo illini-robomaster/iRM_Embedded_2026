@@ -805,6 +805,8 @@ void RM_RTOS_Default_Task(const void* args) {
   bool enabled = false;
   float spin_speed_smoothed = 0.0f;
   float spin_view_offset = 0.0f;
+  bool keyboard_spin = false;  // toggled by R while swr DOWN, cleared otherwise
+  bool last_key_r = false;
   float yaw_target = INS_angle[0] + yaw_motor->GetTheta() - YAW_MOTOR_OFFSET;
   float gimbal_yaw_measured_in_field_reference = yaw_target;
 
@@ -893,6 +895,8 @@ void RM_RTOS_Default_Task(const void* args) {
       PublishYawCommand(stopped);
       spin_speed_smoothed = 0.0f;
       spin_view_offset = 0.0f;
+      keyboard_spin = false;
+      last_key_r = dbus->keyboard.bit.R;
       if (enabled) {
         gimbal_motor->MotorDisable();
         print("Disabled \r\n");
@@ -1022,7 +1026,7 @@ void RM_RTOS_Default_Task(const void* args) {
       }
     }
 
-    // Auto-spin on swr == DOWN (remote wheel dial is broken / ignored).
+    // Auto-spin toggled by keyboard R while swr == DOWN (remote wheel dial is broken / ignored).
     // With live referee buffer data the spin asks for the wheel-speed cap and the power
     // governor below holds the chassis at the referee's limit; without it (bench, no
     // referee) nothing bounds the power, so spin stays at a moderate speed.
@@ -1030,7 +1034,12 @@ void RM_RTOS_Default_Task(const void* args) {
         chassis_buffer_received && HAL_GetTick() - chassis_buffer_rx_ms <= 500;
     constexpr float SPIN_WHEEL_LIMIT = 40.0f;
     const float AUTO_SPIN_SPEED = buffer_fresh ? SPIN_WHEEL_LIMIT : 20.0f;  // wheel rad/s
-    const bool spin_requested = dbus->swr == remote::DOWN;
+    // swr DOWN only arms the R toggle; leaving DOWN stops spin and clears the toggle.
+    const bool key_r = dbus->keyboard.bit.R;
+    if (dbus->swr != remote::DOWN) keyboard_spin = false;
+    else if (key_r && !last_key_r) keyboard_spin = !keyboard_spin;
+    last_key_r = key_r;
+    const bool spin_requested = keyboard_spin;
     // Fixed-rate spin entry/release (wheel rad/s^2) and incremental view-offset changes.
     const float spin_goal = spin_requested ? AUTO_SPIN_SPEED : 0.0f;
     const float spin_step = (spin_requested ? 40.0f : 120.0f) * dt;
@@ -1338,12 +1347,11 @@ void RM_RTOS_Default_Task(const void* args) {
     // - Prevents +/-16384 full-current saturation and 900 rad/s wild oscillation.
     // - At omega=0, delivers 3100 counts breakaway kick immediately.
     // - In steady state, locks right onto 80 rad/s with ~1100 counts.
-    // Feeder triggered by Mouse Left Click or Keyboard F / E / R
+    // Feeder triggered by Mouse Left Click or Keyboard F / E (R toggles spin)
     // Dial firing disabled until actual center/direction is measured on this DT7.
     bool feeder_requested = dbus->mouse.l ||
                             dbus->keyboard.bit.F ||
-                            dbus->keyboard.bit.E ||
-                            dbus->keyboard.bit.R;
+                            dbus->keyboard.bit.E;
 
     // Referee System Regulation: Barrel Heat Limit & Shooter Power Protection (RMUL Rule 3.3.1.3)
     // Each 17mm projectile adds 10 heat.
